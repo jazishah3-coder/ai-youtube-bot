@@ -21,7 +21,7 @@ jobs:
             -d '{
               "contents": [{
                 "parts": [{
-                  "text": "Write one short viral YouTube video topic in one sentence."
+                  "text": "Create one viral YouTube video idea and write a complete 60-90 second script. Choose a topic that is interesting, surprising, useful, or currently popular. Return only the topic title followed by the full narration script. Do not include camera directions, emojis, or explanations."
                 }]
               }]
             }')
