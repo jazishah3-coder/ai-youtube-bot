@@ -10,11 +10,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Start bot
+      - name: Test Gemini AI
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          echo "AI YouTube Bot started successfully!"
-          date
+          RESPONSE=$(curl -s \
+            -H "Content-Type: application/json" \
+            -X POST \
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$GEMINI_API_KEY" \
+            -d '{
+              "contents": [{
+                "parts": [{
+                  "text": "Write one short viral YouTube video topic in one sentence."
+                }]
+              }]
+            }')
 
-      - name: Test completed
+          echo "$RESPONSE"
+
+      - name: Bot completed
         run: |
-          echo "Daily automation is working."
+          echo "AI YouTube Bot is working!"
+          date
