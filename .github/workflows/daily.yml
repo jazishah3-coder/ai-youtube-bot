@@ -23,7 +23,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg espeak-ng
           python -m pip install --upgrade pip
-          pip install requests pillow edge-tts google-api-python-client google-auth google-auth-httplib2
+          pip install requests pillow edge-tts google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib
 
       - name: Create and upload video
         env:
@@ -35,22 +35,19 @@ jobs:
           set -euo pipefail
 
           cat > bot.py <<'PY'
-          import os
           import json
-          import time
+          import os
           import subprocess
-          import textwrap
+          import time
           import xml.etree.ElementTree as ET
           from pathlib import Path
 
           import requests
           from PIL import Image, ImageDraw, ImageFont
-
           from google.oauth2.credentials import Credentials
           from google.auth.transport.requests import Request
           from googleapiclient.discovery import build
           from googleapiclient.http import MediaFileUpload
-
 
           GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
           CLIENT_ID = os.environ["YOUTUBE_CLIENT_ID"]
@@ -65,10 +62,8 @@ jobs:
 
           def gemini(prompt):
               url = (
-                  "https://generativelanguage.googleapis.com/v1beta/models/"
-                  + MODEL
-                  + ":generateContent?key="
-                  + GEMINI_API_KEY
+                  f"https://generativelanguage.googleapis.com/v1beta/models/"
+                  f"{MODEL}:generateContent?key={GEMINI_API_KEY}"
               )
 
               payload = {
@@ -99,19 +94,24 @@ jobs:
 
                       if response.status_code in (429, 500, 502, 503, 504):
                           raise RuntimeError(
-                              f"Gemini server error {response.status_code}: "
+                              f"Gemini HTTP {response.status_code}: "
                               f"{response.text[:500]}"
                           )
 
                       response.raise_for_status()
 
                       data = response.json()
-                      text = data["candidates"][0]["content"]["parts"][0]["text"]
+
+                      text = (
+                          data["candidates"][0]
+                          ["content"]["parts"][0]["text"]
+                      )
 
                       return json.loads(text)
 
                   except Exception as exc:
                       last_error = exc
+
                       print(
                           f"Gemini attempt {attempt + 1}/6 failed: {exc}"
                       )
@@ -125,13 +125,12 @@ jobs:
 
 
           def get_trends():
-              url = "https://trends.google.com/trending/rss?geo=US"
-
               response = requests.get(
-                  url,
+                  "https://trends.google.com/trending/rss?geo=US",
                   timeout=30,
                   headers={"User-Agent": "Mozilla/5.0"}
               )
+
               response.raise_for_status()
 
               root = ET.fromstring(response.text)
@@ -139,13 +138,10 @@ jobs:
               topics = []
 
               for item in root.findall(".//item"):
-                  title = item.findtext("title")
+                  title = (item.findtext("title") or "").strip()
 
-                  if title:
-                      title = title.strip()
-
-                      if title and title not in topics:
-                          topics.append(title)
+                  if title and title not in topics:
+                      topics.append(title)
 
                   if len(topics) >= 20:
                       break
@@ -157,8 +153,10 @@ jobs:
 
           try:
               trends = get_trends()
+
           except Exception as exc:
               print("Google Trends failed:", exc)
+
               trends = [
                   "latest technology",
                   "artificial intelligence",
@@ -167,6 +165,7 @@ jobs:
                   "science facts"
               ]
 
+
           print("Trending topics:")
 
           for topic in trends[:10]:
@@ -174,8 +173,8 @@ jobs:
 
 
           trend_text = "\n".join(
-              f"{index + 1}. {topic}"
-              for index, topic in enumerate(trends[:20])
+              f"{i + 1}. {topic}"
+              for i, topic in enumerate(trends[:20])
           )
 
 
@@ -199,8 +198,21 @@ jobs:
             "topic": "chosen topic",
             "title": "clickable YouTube title",
             "description": "YouTube description",
-            "hashtags": ["#tag1", "#tag2", "#tag3", "#tag4", "#tag5"],
-            "tags": ["tag1", "tag2", "tag3", "tag4", "tag5", "tag6"],
+            "hashtags": [
+              "#tag1",
+              "#tag2",
+              "#tag3",
+              "#tag4",
+              "#tag5"
+            ],
+            "tags": [
+              "tag1",
+              "tag2",
+              "tag3",
+              "tag4",
+              "tag5",
+              "tag6"
+            ],
             "script": "complete narration script around 60-90 seconds",
             "slides": [
               "short slide text 1",
@@ -213,19 +225,21 @@ jobs:
           }}
 
           Rules:
-          - Script must be engaging.
           - Start with a strong hook.
-          - No unsupported medical or dangerous claims.
+          - Be factual.
+          - Avoid unsupported medical or dangerous claims.
           - No political persuasion.
           - Keep slide text short.
-          - Make title highly clickable but not misleading.
+          - Make the title clickable but not misleading.
           - Return JSON only.
           """
+
 
           print("Generating content with Gemini...")
 
           content = gemini(prompt)
 
+          topic = str(content["topic"]).strip()
           title = str(content["title"]).strip()
           description = str(content["description"]).strip()
           script = str(content["script"]).strip()
@@ -234,33 +248,51 @@ jobs:
           tags = content.get("tags", [])
           slides = content.get("slides", [])
 
-          print("Topic:", content["topic"])
+          print("Topic:", topic)
           print("Title:", title)
 
 
-          if not slides:
-              slides = [
-                  title,
-                  "Here is something you should know.",
-                  "This is why it matters.",
-                  "The surprising part is this.",
-                  "Most people don't know this.",
-                  "Follow for more."
-              ]
+          if not isinstance(slides, list):
+              slides = []
 
           while len(slides) < 6:
-              slides.append("Follow for more interesting facts.")
+              slides.append(
+                  "Follow for more interesting facts."
+              )
 
-          slides = slides[:6]
+          slides = [
+              str(x).strip()
+              for x in slides[:6]
+          ]
+
+
+          if not isinstance(hashtags, list):
+              hashtags = []
+
+          if not isinstance(tags, list):
+              tags = []
+
+
+          hashtags = [
+              str(x).strip()
+              for x in hashtags
+              if str(x).strip()
+          ]
+
+          tags = [
+              str(x).strip()
+              for x in tags
+              if str(x).strip()
+          ]
 
 
           # TEXT TO SPEECH
 
           audio_file = WORK / "voice.mp3"
 
-          print("Creating voice...")
-
           tts_ok = False
+
+          print("Creating voice with edge-tts...")
 
           try:
               subprocess.run(
@@ -273,4 +305,493 @@ jobs:
                       "--text",
                       script,
                       "--write-media",
-                     
+                      str(audio_file)
+                  ],
+                  check=True,
+                  timeout=180
+              )
+
+              tts_ok = (
+                  audio_file.exists()
+                  and audio_file.stat().st_size > 1000
+              )
+
+          except Exception as exc:
+              print("edge-tts failed:", exc)
+
+
+          if not tts_ok:
+              print("Trying espeak-ng fallback...")
+
+              wav_file = WORK / "voice.wav"
+
+              subprocess.run(
+                  [
+                      "espeak-ng",
+                      "-w",
+                      str(wav_file),
+                      script
+                  ],
+                  check=True,
+                  timeout=180
+              )
+
+              subprocess.run(
+                  [
+                      "ffmpeg",
+                      "-y",
+                      "-i",
+                      str(wav_file),
+                      "-codec:a",
+                      "libmp3lame",
+                      "-q:a",
+                      "4",
+                      str(audio_file)
+                  ],
+                  check=True,
+                  timeout=180
+              )
+
+
+          if (
+              not audio_file.exists()
+              or audio_file.stat().st_size < 1000
+          ):
+              raise RuntimeError(
+                  "Voice file was not created."
+              )
+
+
+          # SLIDES
+
+          try:
+              font_big = ImageFont.truetype(
+                  "/usr/share/fonts/truetype/dejavu/"
+                  "DejaVuSans-Bold.ttf",
+                  58
+              )
+
+              font_small = ImageFont.truetype(
+                  "/usr/share/fonts/truetype/dejavu/"
+                  "DejaVuSans.ttf",
+                  30
+              )
+
+          except Exception:
+              font_big = ImageFont.load_default()
+              font_small = ImageFont.load_default()
+
+
+          def make_slide(text, index):
+              img = Image.new(
+                  "RGB",
+                  (1280, 720),
+                  (18, 18, 24)
+              )
+
+              draw = ImageDraw.Draw(img)
+
+              draw.text(
+                  (60, 55),
+                  f"{index + 1}/6",
+                  font=font_small,
+                  fill=(190, 190, 190)
+              )
+
+              lines = []
+              words = str(text).split()
+              current = ""
+
+              for word in words:
+                  test = (
+                      current + " " + word
+                  ).strip()
+
+                  width = draw.textbbox(
+                      (0, 0),
+                      test,
+                      font=font_big
+                  )[2]
+
+                  if width <= 1120:
+                      current = test
+
+                  else:
+                      if current:
+                          lines.append(current)
+
+                      current = word
+
+              if current:
+                  lines.append(current)
+
+              lines = lines[:7]
+
+              y = 190
+
+              for line in lines:
+                  box = draw.textbbox(
+                      (0, 0),
+                      line,
+                      font=font_big
+                  )
+
+                  width = box[2] - box[0]
+                  height = box[3] - box[1]
+
+                  draw.text(
+                      ((1280 - width) / 2, y),
+                      line,
+                      font=font_big,
+                      fill=(255, 255, 255)
+                  )
+
+                  y += height + 22
+
+              path = WORK / f"slide_{index + 1}.png"
+
+              img.save(path)
+
+              return path
+
+
+          slide_files = [
+              make_slide(text, i)
+              for i, text in enumerate(slides)
+          ]
+
+
+          # VIDEO
+
+          print("Creating video...")
+
+          probe = subprocess.run(
+              [
+                  "ffprobe",
+                  "-v",
+                  "error",
+                  "-show_entries",
+                  "format=duration",
+                  "-of",
+                  "default=noprint_wrappers=1:nokey=1",
+                  str(audio_file)
+              ],
+              capture_output=True,
+              text=True,
+              check=True
+          )
+
+          duration = max(
+              6.0,
+              float(probe.stdout.strip())
+          )
+
+          per_slide = duration / len(slide_files)
+
+          concat_file = WORK / "slides.txt"
+
+          with concat_file.open(
+              "w",
+              encoding="utf-8"
+          ) as f:
+
+              for p in slide_files:
+                  f.write(
+                      f"file '{p.resolve()}'\n"
+                  )
+
+                  f.write(
+                      f"duration {per_slide:.3f}\n"
+                  )
+
+              f.write(
+                  f"file '{slide_files[-1].resolve()}'\n"
+              )
+
+
+          video_file = WORK / "video.mp4"
+
+          subprocess.run(
+              [
+                  "ffmpeg",
+                  "-y",
+                  "-f",
+                  "concat",
+                  "-safe",
+                  "0",
+                  "-i",
+                  str(concat_file),
+                  "-i",
+                  str(audio_file),
+                  "-map",
+                  "0:v:0",
+                  "-map",
+                  "1:a:0",
+                  "-c:v",
+                  "libx264",
+                  "-pix_fmt",
+                  "yuv420p",
+                  "-c:a",
+                  "aac",
+                  "-b:a",
+                  "128k",
+                  "-shortest",
+                  str(video_file)
+              ],
+              check=True,
+              timeout=300
+          )
+
+
+          if (
+              not video_file.exists()
+              or video_file.stat().st_size < 10000
+          ):
+              raise RuntimeError(
+                  "Video file was not created correctly."
+              )
+
+
+          # THUMBNAIL
+
+          thumb = Image.new(
+              "RGB",
+              (1280, 720),
+              (10, 10, 15)
+          )
+
+          draw = ImageDraw.Draw(thumb)
+
+          try:
+              thumb_font = ImageFont.truetype(
+                  "/usr/share/fonts/truetype/dejavu/"
+                  "DejaVuSans-Bold.ttf",
+                  64
+              )
+
+          except Exception:
+              thumb_font = font_big
+
+
+          words = title.split()
+          lines = []
+          current = ""
+
+          for word in words:
+              test = (
+                  current + " " + word
+              ).strip()
+
+              width = draw.textbbox(
+                  (0, 0),
+                  test,
+                  font=thumb_font
+              )[2]
+
+              if width <= 1120:
+                  current = test
+
+              else:
+                  if current:
+                      lines.append(current)
+
+                  current = word
+
+          if current:
+              lines.append(current)
+
+
+          y = 210
+
+          for line in lines[:4]:
+              box = draw.textbbox(
+                  (0, 0),
+                  line,
+                  font=thumb_font
+              )
+
+              width = box[2] - box[0]
+              height = box[3] - box[1]
+
+              draw.text(
+                  ((1280 - width) / 2, y),
+                  line,
+                  font=thumb_font,
+                  fill=(255, 255, 255)
+              )
+
+              y += height + 25
+
+
+          thumb_file = WORK / "thumbnail.jpg"
+
+          thumb.save(
+              thumb_file,
+              quality=92
+          )
+
+
+          # YOUTUBE AUTH
+
+          print("Authorizing YouTube...")
+
+          creds = Credentials(
+              None,
+              refresh_token=REFRESH_TOKEN,
+              token_uri="https://oauth2.googleapis.com/token",
+              client_id=CLIENT_ID,
+              client_secret=CLIENT_SECRET,
+              scopes=[
+                  "https://www.googleapis.com/auth/youtube.upload"
+              ]
+          )
+
+
+          try:
+              creds.refresh(Request())
+
+          except Exception as exc:
+              raise RuntimeError(
+                  "YouTube OAuth refresh failed. "
+                  "If the log says invalid_grant, "
+                  "the refresh token must be regenerated."
+              ) from exc
+
+
+          youtube = build(
+              "youtube",
+              "v3",
+              credentials=creds
+          )
+
+
+          upload_tags = tags[:30]
+
+          upload_description = description
+
+          if hashtags:
+              upload_description += (
+                  "\n\n" + " ".join(hashtags[:10])
+              )
+
+
+          body = {
+              "snippet": {
+                  "title": title[:100],
+                  "description": upload_description[:5000],
+                  "tags": upload_tags,
+                  "categoryId": "27"
+              },
+              "status": {
+                  "privacyStatus": "public"
+              }
+          }
+
+
+          print("Uploading video to YouTube...")
+
+
+          media = MediaFileUpload(
+              str(video_file),
+              mimetype="video/mp4",
+              resumable=True
+          )
+
+
+          request = youtube.videos().insert(
+              part="snippet,status",
+              body=body,
+              media_body=media
+          )
+
+
+          response = None
+
+          while response is None:
+              status, response = request.next_chunk()
+
+              if status:
+                  print(
+                      "Upload progress:",
+                      int(status.progress() * 100),
+                      "%"
+                  )
+
+
+          video_id = response["id"]
+
+          video_url = (
+              f"https://www.youtube.com/watch?v={video_id}"
+          )
+
+
+          print(
+              "VIDEO UPLOADED SUCCESSFULLY"
+          )
+
+          print(
+              "YouTube URL:",
+              video_url
+          )
+
+
+          # THUMBNAIL UPLOAD
+
+          try:
+              youtube.thumbnails().set(
+                  videoId=video_id,
+                  media_body=MediaFileUpload(
+                      str(thumb_file),
+                      mimetype="image/jpeg"
+                  )
+              ).execute()
+
+              print(
+                  "Thumbnail uploaded successfully."
+              )
+
+          except Exception as exc:
+              print(
+                  "Thumbnail upload failed:",
+                  exc
+              )
+
+
+          result = {
+              "video_id": video_id,
+              "url": video_url,
+              "title": title,
+              "topic": topic
+          }
+
+
+          (
+              WORK / "result.json"
+          ).write_text(
+              json.dumps(
+                  result,
+                  indent=2
+              ),
+              encoding="utf-8"
+          )
+
+
+          print("DONE")
+
+          print(
+              json.dumps(
+                  result,
+                  indent=2
+              )
+          )
+          PY
+
+          python bot.py
+
+      - name: Upload generated files
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-video-output
+          path: output/
+          if-no-files-found: warn
