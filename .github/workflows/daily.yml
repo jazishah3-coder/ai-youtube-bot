@@ -28,6 +28,7 @@ jobs:
       - name: Generate Monkey Short and Upload
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          POLLINATIONS_API_KEY: ${{ secrets.POLLINATIONS_API_KEY }}
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
@@ -35,10 +36,10 @@ jobs:
           cat > bot.py <<'PY'
           import os
           import json
-          import base64
           import asyncio
           import subprocess
           from pathlib import Path
+          from urllib.parse import quote
 
           import requests
           import edge_tts
@@ -49,12 +50,14 @@ jobs:
           from googleapiclient.http import MediaFileUpload
 
           GEMINI_KEY = os.environ["GEMINI_API_KEY"]
+          POLLINATIONS_KEY = os.environ["POLLINATIONS_API_KEY"]
+
           CLIENT_ID = os.environ["YOUTUBE_CLIENT_ID"]
           CLIENT_SECRET = os.environ["YOUTUBE_CLIENT_SECRET"]
           REFRESH_TOKEN = os.environ["YOUTUBE_REFRESH_TOKEN"]
 
           TEXT_MODEL = "gemini-3.5-flash-lite"
-          IMAGE_MODEL = "gemini-3.1-flash-image"
+          IMAGE_MODEL = "flux"
 
           OUT = Path("output")
           OUT.mkdir(exist_ok=True)
@@ -74,9 +77,7 @@ jobs:
                   "contents": [
                       {
                           "parts": [
-                              {
-                                  "text": prompt
-                              }
+                              {"text": prompt}
                           ]
                       }
                   ],
@@ -106,14 +107,7 @@ jobs:
                       .strip()
               )
 
-          def gemini_image(prompt, filename):
-              url = (
-                  "https://generativelanguage.googleapis.com/v1beta/models/"
-                  + IMAGE_MODEL
-                  + ":generateContent?key="
-                  + GEMINI_KEY
-              )
-
+          def pollinations_image(prompt, filename):
               full_prompt = prompt + """
               Photorealistic cinematic image.
               Vertical 9:16 composition.
@@ -125,59 +119,41 @@ jobs:
               No watermark.
               """
 
-              payload = {
-                  "contents": [
-                      {
-                          "parts": [
-                              {
-                                  "text": full_prompt
-                              }
-                          ]
-                      }
-                  ],
-                  "generationConfig": {
-                      "responseModalities": ["IMAGE"],
-                      "imageConfig": {
-                          "aspectRatio": "9:16",
-                          "imageSize": "1K"
-                      }
-                  }
+              url = (
+                  "https://gen.pollinations.ai/image/"
+                  + quote(full_prompt, safe="")
+              )
+
+              params = {
+                  "model": IMAGE_MODEL,
+                  "width": 720,
+                  "height": 1280
               }
 
-              r = requests.post(
+              headers = {
+                  "Authorization": "Bearer " + POLLINATIONS_KEY
+              }
+
+              r = requests.get(
                   url,
-                  json=payload,
+                  params=params,
+                  headers=headers,
                   timeout=240
               )
 
               r.raise_for_status()
 
-              data = r.json()
+              content_type = r.headers.get(
+                  "content-type",
+                  ""
+              ).lower()
 
-              for candidate in data.get("candidates", []):
-                  parts = (
-                      candidate
-                      .get("content", {})
-                      .get("parts", [])
+              if "image" not in content_type:
+                  raise RuntimeError(
+                      "Pollinations did not return an image."
                   )
 
-                  for part in parts:
-                      inline = (
-                          part.get("inlineData")
-                          or part.get("inline_data")
-                      )
-
-                      if inline and inline.get("data"):
-                          raw = base64.b64decode(
-                              inline["data"]
-                          )
-
-                          filename.write_bytes(raw)
-                          return
-
-              raise RuntimeError(
-                  "Gemini did not return an image."
-              )
+              filename.write_bytes(r.content)
 
           async def make_voice(text, filename):
               voice = edge_tts.Communicate(
@@ -185,7 +161,6 @@ jobs:
                   "ur-PK-AsadNeural",
                   rate="+5%"
               )
-
               await voice.save(str(filename))
 
           def main():
@@ -261,7 +236,7 @@ jobs:
               for i, scene in enumerate(scenes):
 
                   filename = OUT / (
-                      "scene_" + str(i + 1) + ".png"
+                      "scene_" + str(i + 1) + ".jpg"
                   )
 
                   print(
@@ -270,7 +245,7 @@ jobs:
                       "of 6..."
                   )
 
-                  gemini_image(
+                  pollinations_image(
                       scene["visual_prompt"],
                       filename
                   )
