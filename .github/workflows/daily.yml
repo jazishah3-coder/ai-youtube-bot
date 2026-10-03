@@ -138,6 +138,7 @@ jobs:
 
 
           def gemini_text(prompt):
+
               url = (
                   "https://generativelanguage.googleapis.com/v1beta/models/"
                   + TEXT_MODEL
@@ -161,31 +162,53 @@ jobs:
                   }
               }
 
-              response = requests.post(
-                  url,
-                  json=payload,
-                  timeout=180
+              last_error = None
+
+              for attempt in range(3):
+
+                  try:
+                      response = requests.post(
+                          url,
+                          json=payload,
+                          timeout=180
+                      )
+
+                      response.raise_for_status()
+
+                      data = response.json()
+
+                      text = (
+                          data["candidates"][0]
+                          ["content"]["parts"][0]["text"]
+                      )
+
+                      text = (
+                          text.replace("```json", "")
+                          .replace("```", "")
+                          .strip()
+                      )
+
+                      return json.loads(text)
+
+                  except Exception as e:
+
+                      last_error = e
+
+                      print(
+                          f"Gemini attempt {attempt + 1}/3 failed:",
+                          e
+                      )
+
+                      if attempt < 2:
+                          time.sleep(5)
+
+              raise RuntimeError(
+                  f"Gemini failed after 3 attempts: {last_error}"
               )
-
-              response.raise_for_status()
-
-              data = response.json()
-
-              text = (
-                  data["candidates"][0]
-                  ["content"]["parts"][0]["text"]
-              )
-
-              text = (
-                  text.replace("```json", "")
-                  .replace("```", "")
-                  .strip()
-              )
-
-              return json.loads(text)
 
 
           def pollinations_image(prompt, filename):
+
               full_prompt = prompt + """
 
               Photorealistic cinematic image.
@@ -205,7 +228,10 @@ jobs:
               No watermark.
               """
 
-              encoded = quote(full_prompt, safe="")
+              encoded = quote(
+                  full_prompt,
+                  safe=""
+              )
 
               url = (
                   "https://gen.pollinations.ai/image/"
@@ -223,7 +249,14 @@ jobs:
               }
 
               for attempt in range(3):
+
                   try:
+
+                      print(
+                          f"Pollinations image attempt "
+                          f"{attempt + 1}/3..."
+                      )
+
                       response = requests.get(
                           url,
                           params=params,
@@ -245,34 +278,181 @@ jobs:
                               "Pollinations did not return an image."
                           )
 
-                      filename.write_bytes(response.content)
+                      filename.write_bytes(
+                          response.content
+                      )
+
+                      if filename.stat().st_size < 1000:
+                          raise RuntimeError(
+                              "Generated image file is too small."
+                          )
+
+                      print(
+                          "Image created:",
+                          filename
+                      )
 
                       return
 
-                  except Exception:
-                      if attempt == 2:
-                          raise
+                  except Exception as e:
 
-                      time.sleep(5)
+                      print(
+                          "Image generation failed:",
+                          e
+                      )
+
+                      if attempt < 2:
+                          time.sleep(5)
+
+              raise RuntimeError(
+                  f"Pollinations failed for {filename}"
+              )
 
 
           async def make_voice(text, filename):
-              voice = edge_tts.Communicate(
-                  text,
-                  "hi-IN-MadhurNeural",
-                  rate="+3%",
-                  pitch="+0Hz"
+
+              print(
+                  "Finding available Urdu/Hindi voices..."
               )
 
-              await voice.save(str(filename))
+              try:
+
+                  voices = await edge_tts.list_voices()
+
+                  available = [
+                      v["ShortName"]
+                      for v in voices
+                      if v.get("Locale") in [
+                          "ur-PK",
+                          "hi-IN"
+                      ]
+                  ]
+
+                  print(
+                      "Available Urdu/Hindi voices:",
+                      available
+                  )
+
+              except Exception as e:
+
+                  print(
+                      "Could not list voices:",
+                      e
+                  )
+
+                  available = []
+
+
+              preferred = [
+                  "ur-PK-UzmaNeural",
+                  "ur-PK-AsadNeural",
+                  "hi-IN-MadhurNeural",
+                  "hi-IN-SwaraNeural"
+              ]
+
+
+              voice_list = []
+
+
+              for voice in preferred:
+
+                  if (
+                      voice in available
+                      and voice not in voice_list
+                  ):
+                      voice_list.append(voice)
+
+
+              for voice in available:
+
+                  if voice not in voice_list:
+                      voice_list.append(voice)
+
+
+              for voice in preferred:
+
+                  if voice not in voice_list:
+                      voice_list.append(voice)
+
+
+              if not voice_list:
+
+                  raise RuntimeError(
+                      "No Urdu/Hindi TTS voice available."
+                  )
+
+
+              last_error = None
+
+
+              for voice_name in voice_list:
+
+                  for attempt in range(3):
+
+                      try:
+
+                          print(
+                              f"Trying voice: {voice_name} "
+                              f"(attempt {attempt + 1}/3)"
+                          )
+
+                          filename.unlink(
+                              missing_ok=True
+                          )
+
+                          communicate = edge_tts.Communicate(
+                              text,
+                              voice_name,
+                              rate="+3%",
+                              pitch="+0Hz"
+                          )
+
+                          await communicate.save(
+                              str(filename)
+                          )
+
+                          if (
+                              filename.exists()
+                              and filename.stat().st_size > 1000
+                          ):
+
+                              print(
+                                  "Voice created successfully:",
+                                  voice_name
+                              )
+
+                              return
+
+                          raise RuntimeError(
+                              "Audio file was not created properly."
+                          )
+
+                      except Exception as e:
+
+                          last_error = e
+
+                          print(
+                              f"Voice failed: "
+                              f"{voice_name}: {e}"
+                          )
+
+                          await asyncio.sleep(3)
+
+
+              raise RuntimeError(
+                  f"All Urdu/Hindi voices failed: {last_error}"
+              )
 
 
           def get_daily_topic():
+
               pakistan_now = datetime.now(
                   ZoneInfo("Asia/Karachi")
               )
 
-              day_number = pakistan_now.date().toordinal()
+              day_number = (
+                  pakistan_now.date().toordinal()
+              )
 
               topic = TOPICS[
                   day_number % len(TOPICS)
@@ -285,24 +465,37 @@ jobs:
 
               topic, pakistan_now = get_daily_topic()
 
+
               print("========================================")
-              print("PAKISTAN DATE:", pakistan_now.strftime("%Y-%m-%d"))
-              print("TODAY'S TRADING TOPIC:", topic)
+              print(
+                  "PAKISTAN DATE:",
+                  pakistan_now.strftime("%Y-%m-%d")
+              )
+              print(
+                  "TODAY'S TRADING TOPIC:",
+                  topic
+              )
               print("========================================")
 
+
               story_prompt = f"""
-              Create ONE original funny wholesome YouTube Shorts story.
+
+              Create ONE original funny wholesome
+              YouTube Shorts story.
 
               TODAY'S FIXED TRADING TOPIC:
               {topic}
 
-              The video must teach this trading topic in a simple,
-              entertaining and memorable way.
+              The video must teach this trading topic
+              in a simple, entertaining and memorable way.
 
               Main character:
-              The SAME young rhesus macaque monkey in every scene.
+
+              The SAME young rhesus macaque monkey
+              in every scene.
 
               Character:
+
               brown-grey fur,
               expressive dark eyes,
               small rounded ears,
@@ -310,6 +503,7 @@ jobs:
               slightly mischievous face.
 
               STORY STYLE:
+
               Very funny.
               Cute monkey comedy.
               Strong hook at the beginning.
@@ -318,6 +512,7 @@ jobs:
               End with a memorable lesson.
 
               IMPORTANT:
+
               This is educational content only.
 
               Do NOT give:
@@ -328,14 +523,16 @@ jobs:
               fake financial promises,
               fake expert claims.
 
-              Do not tell viewers to buy or sell any specific coin,
-              stock or financial product.
+              Do not tell viewers to buy or sell
+              any specific coin, stock or financial product.
 
               LANGUAGE RULE:
 
-              Narration MUST be written completely in natural Urdu script.
+              Narration MUST be written completely
+              in natural Urdu script.
 
-              Use Urdu alphabet such as:
+              Example:
+
               "بندر نے آج ایک عجیب غلطی کر دی"
 
               Do NOT write narration in Roman Urdu.
@@ -346,363 +543,18 @@ jobs:
               by a clear Hindi/Urdu voice.
 
               Title should be catchy and related to trading.
-              Title can contain simple English trading words if useful.
 
-              Description should be in Urdu with simple trading terms.
+              Title can contain simple English trading words
+              if useful.
+
+              Description should be in Urdu
+              with simple trading terms.
 
               Create exactly 6 scenes.
 
               Each scene should last exactly 5 seconds.
 
-              Total narration should be short enough for about 25 to 30 seconds.
+              Total narration should be short enough
+              for about 25 to 30 seconds.
 
-              Narration should be around 65 to 80 Urdu words.
-
-              VISUAL PROMPTS:
-              Visual prompts may be written in English.
-              They must clearly describe the funny monkey action.
-              Do not put text inside images.
-
-              Return ONLY valid JSON.
-
-              Required JSON:
-
-              {{
-                "title": "...",
-                "description": "...",
-                "narration": "...",
-                "hashtags": [
-                  "...",
-                  "...",
-                  "...",
-                  "...",
-                  "..."
-                ],
-                "tags": [
-                  "...",
-                  "...",
-                  "...",
-                  "..."
-                ],
-                "scenes": [
-                  {{
-                    "visual_prompt": "...",
-                    "duration": 5
-                  }},
-                  {{
-                    "visual_prompt": "...",
-                    "duration": 5
-                  }},
-                  {{
-                    "visual_prompt": "...",
-                    "duration": 5
-                  }},
-                  {{
-                    "visual_prompt": "...",
-                    "duration": 5
-                  }},
-                  {{
-                    "visual_prompt": "...",
-                    "duration": 5
-                  }},
-                  {{
-                    "visual_prompt": "...",
-                    "duration": 5
-                  }}
-                ]
-              }}
-              """
-
-              story = gemini_text(story_prompt)
-
-              title = str(
-                  story.get("title", "")
-              ).strip()
-
-              description = str(
-                  story.get("description", "")
-              ).strip()
-
-              narration = str(
-                  story.get("narration", "")
-              ).strip()
-
-              hashtags = story.get(
-                  "hashtags",
-                  []
-              )
-
-              tags = story.get(
-                  "tags",
-                  []
-              )
-
-              scenes = story.get(
-                  "scenes",
-                  []
-              )
-
-              if not title:
-                  raise RuntimeError(
-                      "Gemini returned an empty title."
-                  )
-
-              if not narration:
-                  raise RuntimeError(
-                      "Gemini returned empty narration."
-                  )
-
-              if len(scenes) != 6:
-                  raise RuntimeError(
-                      "Gemini did not return exactly 6 scenes."
-                  )
-
-              urdu_count = sum(
-                  1
-                  for char in narration
-                  if "\u0600" <= char <= "\u06ff"
-              )
-
-              if urdu_count < 20:
-                  raise RuntimeError(
-                      "Narration is not sufficiently Urdu script."
-                  )
-
-              print("TITLE:")
-              print(title)
-
-              print("NARRATION:")
-              print(narration)
-
-              image_files = []
-
-              for index, scene in enumerate(scenes):
-                  filename = OUT / f"scene_{index + 1}.png"
-
-                  print(
-                      f"Generating image {index + 1} of 6..."
-                  )
-
-                  pollinations_image(
-                      str(scene["visual_prompt"]),
-                      filename
-                  )
-
-                  image_files.append(filename)
-
-              audio_file = OUT / "voice.mp3"
-
-              print("Creating clear Hindi/Urdu voice...")
-
-              asyncio.run(
-                  make_voice(
-                      narration,
-                      audio_file
-                  )
-              )
-
-              clips = []
-
-              for index, image in enumerate(image_files):
-                  clip = OUT / f"clip_{index + 1}.mp4"
-
-                  print(
-                      f"Creating video clip {index + 1} of 6..."
-                  )
-
-                  run([
-                      "ffmpeg",
-                      "-y",
-                      "-loop",
-                      "1",
-                      "-i",
-                      str(image),
-                      "-t",
-                      "5",
-                      "-vf",
-                      "scale=720:1280,"
-                      "zoompan="
-                      "z='min(zoom+0.0015,1.08)':"
-                      "x='iw/2-(iw/zoom/2)':"
-                      "y='ih/2-(ih/zoom/2)':"
-                      "d=150:"
-                      "s=720x1280",
-                      "-r",
-                      "30",
-                      "-pix_fmt",
-                      "yuv420p",
-                      "-an",
-                      str(clip)
-                  ])
-
-                  clips.append(clip)
-
-              concat_file = OUT / "concat.txt"
-
-              with open(
-                  concat_file,
-                  "w",
-                  encoding="utf-8"
-              ) as file:
-                  for clip in clips:
-                      file.write(
-                          f"file '{clip.resolve()}'\n"
-                      )
-
-              video_file = OUT / "monkey_trading_short.mp4"
-
-              print("Combining video and Urdu voice...")
-
-              run([
-                  "ffmpeg",
-                  "-y",
-                  "-f",
-                  "concat",
-                  "-safe",
-                  "0",
-                  "-i",
-                  str(concat_file),
-                  "-i",
-                  str(audio_file),
-                  "-c:v",
-                  "libx264",
-                  "-c:a",
-                  "aac",
-                  "-shortest",
-                  "-pix_fmt",
-                  "yuv420p",
-                  "-movflags",
-                  "+faststart",
-                  str(video_file)
-              ])
-
-              fixed_hashtags = (
-                  "#Trading "
-                  "#TradingUrdu "
-                  "#TradingEducation "
-                  "#TradingPsychology "
-                  "#RiskManagement "
-                  "#Shorts"
-              )
-
-              clean_hashtags = []
-
-              for hashtag in hashtags:
-                  hashtag = str(
-                      hashtag
-                  ).strip()
-
-                  if hashtag:
-                      if not hashtag.startswith("#"):
-                          hashtag = "#" + hashtag
-
-                      if hashtag not in clean_hashtags:
-                          clean_hashtags.append(
-                              hashtag
-                          )
-
-              hashtag_text = " ".join(
-                  clean_hashtags[:8]
-              )
-
-              final_description = (
-                  description
-                  + "\n\n"
-                  + hashtag_text
-                  + "\n"
-                  + fixed_hashtags
-              )
-
-              final_tags = [
-                  "trading",
-                  "trading education",
-                  "trading urdu",
-                  "trading psychology",
-                  "risk management",
-                  "monkey trading",
-                  "funny monkey",
-                  "trading shorts",
-                  "shorts"
-              ]
-
-              for tag in tags:
-                  tag = str(tag).strip()
-
-                  if tag and tag not in final_tags:
-                      final_tags.append(tag)
-
-              credentials = Credentials(
-                  None,
-                  refresh_token=REFRESH_TOKEN,
-                  token_uri="https://oauth2.googleapis.com/token",
-                  client_id=CLIENT_ID,
-                  client_secret=CLIENT_SECRET
-              )
-
-              print("Refreshing YouTube login...")
-
-              credentials.refresh(
-                  Request()
-              )
-
-              youtube = build(
-                  "youtube",
-                  "v3",
-                  credentials=credentials
-              )
-
-              body = {
-                  "snippet": {
-                      "title": title[:100],
-                      "description": final_description,
-                      "tags": final_tags[:40],
-                      "categoryId": "24"
-                  },
-                  "status": {
-                      "privacyStatus": "public",
-                      "selfDeclaredMadeForKids": False
-                  }
-              }
-
-              print("Uploading video to YouTube...")
-
-              media = MediaFileUpload(
-                  str(video_file),
-                  mimetype="video/mp4",
-                  resumable=True
-              )
-
-              upload_request = youtube.videos().insert(
-                  part="snippet,status",
-                  body=body,
-                  media_body=media
-              )
-
-              response = upload_request.execute()
-
-              video_id = response["id"]
-
-              print("========================================")
-              print("SUCCESS!")
-              print("YouTube video ID:", video_id)
-              print(
-                  "YouTube URL:",
-                  "https://www.youtube.com/watch?v="
-                  + video_id
-              )
-              print("========================================")
-
-
-          if __name__ == "__main__":
-              main()
-          PY
-
-          python bot.py
-
-      - name: Save generated files
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: monkey-trading-youtube-output
-          path: output/
-          if-no-files-found: warn
+              Narration should be around 
