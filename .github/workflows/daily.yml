@@ -6,7 +6,7 @@ on:
     - cron: "0 3 * * *"
 
 jobs:
-  daily:
+  run-bot:
     runs-on: ubuntu-latest
 
     steps:
@@ -23,7 +23,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg espeak-ng
           python -m pip install --upgrade pip
-          pip install requests pillow edge-tts google-api-python-client google-auth
+          pip install requests pillow edge-tts google-api-python-client google-auth google-auth-httplib2
 
       - name: Create and upload video
         env:
@@ -37,47 +37,240 @@ jobs:
           cat > bot.py <<'PY'
           import os
           import json
-          import re
-          import subprocess
-          import asyncio
-          import textwrap
           import time
+          import subprocess
+          import textwrap
           import xml.etree.ElementTree as ET
           from pathlib import Path
 
           import requests
           from PIL import Image, ImageDraw, ImageFont
-          import edge_tts
 
-          from google.auth.transport.requests import Request
-          from google.auth.exceptions import RefreshError
           from google.oauth2.credentials import Credentials
+          from google.auth.transport.requests import Request
           from googleapiclient.discovery import build
           from googleapiclient.http import MediaFileUpload
 
 
-          GEMINI_KEY = os.environ["GEMINI_API_KEY"]
+          GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
           CLIENT_ID = os.environ["YOUTUBE_CLIENT_ID"]
           CLIENT_SECRET = os.environ["YOUTUBE_CLIENT_SECRET"]
           REFRESH_TOKEN = os.environ["YOUTUBE_REFRESH_TOKEN"]
 
-          WORK = Path("youtube_output")
+          WORK = Path("output")
           WORK.mkdir(exist_ok=True)
 
-          AUDIO_FILE = WORK / "voice.mp3"
-          VIDEO_FILE = WORK / "video.mp4"
-          THUMBNAIL_FILE = WORK / "thumbnail.jpg"
+          MODEL = "gemini-3.5-flash"
+
+
+          def gemini(prompt):
+              url = (
+                  "https://generativelanguage.googleapis.com/v1beta/models/"
+                  + MODEL
+                  + ":generateContent?key="
+                  + GEMINI_API_KEY
+              )
+
+              payload = {
+                  "contents": [
+                      {
+                          "parts": [
+                              {
+                                  "text": prompt
+                              }
+                          ]
+                      }
+                  ],
+                  "generationConfig": {
+                      "temperature": 0.8,
+                      "responseMimeType": "application/json"
+                  }
+              }
+
+              last_error = None
+
+              for attempt in range(6):
+                  try:
+                      response = requests.post(
+                          url,
+                          json=payload,
+                          timeout=120
+                      )
+
+                      if response.status_code in (429, 500, 502, 503, 504):
+                          raise RuntimeError(
+                              f"Gemini server error {response.status_code}: "
+                              f"{response.text[:500]}"
+                          )
+
+                      response.raise_for_status()
+
+                      data = response.json()
+                      text = data["candidates"][0]["content"]["parts"][0]["text"]
+
+                      return json.loads(text)
+
+                  except Exception as exc:
+                      last_error = exc
+                      print(
+                          f"Gemini attempt {attempt + 1}/6 failed: {exc}"
+                      )
+
+                      if attempt < 5:
+                          time.sleep(5 * (attempt + 1))
+
+              raise RuntimeError(
+                  f"Gemini failed after retries: {last_error}"
+              )
 
 
           def get_trends():
               url = "https://trends.google.com/trending/rss?geo=US"
 
-              try:
-                  response = requests.get(url, timeout=30)
-                  response.raise_for_status()
+              response = requests.get(
+                  url,
+                  timeout=30,
+                  headers={"User-Agent": "Mozilla/5.0"}
+              )
+              response.raise_for_status()
 
-                  root = ET.fromstring(response.text)
-                  topics = []
+              root = ET.fromstring(response.text)
 
-                  for item in root.findall(".//item"):
+              topics = []
+
+              for item in root.findall(".//item"):
+                  title = item.findtext("title")
+
+                  if title:
+                      title = title.strip()
+
+                      if title and title not in topics:
+                          topics.append(title)
+
+                  if len(topics) >= 20:
+                      break
+
+              return topics
+
+
+          print("Getting Google Trends...")
+
+          try:
+              trends = get_trends()
+          except Exception as exc:
+              print("Google Trends failed:", exc)
+              trends = [
+                  "latest technology",
+                  "artificial intelligence",
+                  "interesting psychology facts",
+                  "money facts",
+                  "science facts"
+              ]
+
+          print("Trending topics:")
+
+          for topic in trends[:10]:
+              print("-", topic)
+
+
+          trend_text = "\n".join(
+              f"{index + 1}. {topic}"
+              for index, topic in enumerate(trends[:20])
+          )
+
+
+          prompt = f"""
+          You are an expert YouTube content creator.
+
+          Create ONE highly clickable YouTube video using the current
+          trending topics below.
+
+          Channel niche:
+          viral facts, psychology, money and technology
+
+          Trending topics:
+          {trend_text}
+
+          Choose ONE topic that can make an interesting YouTube video.
+
+          Return ONLY valid JSON with exactly these fields:
+
+          {{
+            "topic": "chosen topic",
+            "title": "clickable YouTube title",
+            "description": "YouTube description",
+            "hashtags": ["#tag1", "#tag2", "#tag3", "#tag4", "#tag5"],
+            "tags": ["tag1", "tag2", "tag3", "tag4", "tag5", "tag6"],
+            "script": "complete narration script around 60-90 seconds",
+            "slides": [
+              "short slide text 1",
+              "short slide text 2",
+              "short slide text 3",
+              "short slide text 4",
+              "short slide text 5",
+              "short slide text 6"
+            ]
+          }}
+
+          Rules:
+          - Script must be engaging.
+          - Start with a strong hook.
+          - No unsupported medical or dangerous claims.
+          - No political persuasion.
+          - Keep slide text short.
+          - Make title highly clickable but not misleading.
+          - Return JSON only.
+          """
+
+          print("Generating content with Gemini...")
+
+          content = gemini(prompt)
+
+          title = str(content["title"]).strip()
+          description = str(content["description"]).strip()
+          script = str(content["script"]).strip()
+
+          hashtags = content.get("hashtags", [])
+          tags = content.get("tags", [])
+          slides = content.get("slides", [])
+
+          print("Topic:", content["topic"])
+          print("Title:", title)
+
+
+          if not slides:
+              slides = [
+                  title,
+                  "Here is something you should know.",
+                  "This is why it matters.",
+                  "The surprising part is this.",
+                  "Most people don't know this.",
+                  "Follow for more."
+              ]
+
+          while len(slides) < 6:
+              slides.append("Follow for more interesting facts.")
+
+          slides = slides[:6]
+
+
+          # TEXT TO SPEECH
+
+          audio_file = WORK / "voice.mp3"
+
+          print("Creating voice...")
+
+          tts_ok = False
+
+          try:
+              subprocess.run(
+                  [
+                      "python",
+                      "-m",
+                      "edge_tts",
+                      "--voice",
+                      "en-US-AriaNeural",
+                      "--text",
+                      script,
+                      "--write-media",
                      
