@@ -53,7 +53,6 @@ jobs:
           from googleapiclient.discovery import build
           from googleapiclient.http import MediaFileUpload
 
-
           GEMINI_KEY = os.environ["GEMINI_API_KEY"]
           POLLINATIONS_KEY = os.environ["POLLINATIONS_API_KEY"]
 
@@ -65,7 +64,6 @@ jobs:
 
           OUT = Path("output")
           OUT.mkdir(exist_ok=True)
-
 
           TOPICS = [
               "Support aur Resistance",
@@ -132,13 +130,10 @@ jobs:
               "Trading mein sabr"
           ]
 
-
           def run(cmd):
               subprocess.run(cmd, check=True)
 
-
           def gemini_text(prompt):
-
               url = (
                   "https://generativelanguage.googleapis.com/v1beta/models/"
                   + TEXT_MODEL
@@ -165,7 +160,6 @@ jobs:
               last_error = None
 
               for attempt in range(3):
-
                   try:
                       response = requests.post(
                           url,
@@ -190,13 +184,11 @@ jobs:
 
                       return json.loads(text)
 
-                  except Exception as e:
-
-                      last_error = e
-
+                  except Exception as error:
+                      last_error = error
                       print(
                           f"Gemini attempt {attempt + 1}/3 failed:",
-                          e
+                          error
                       )
 
                       if attempt < 2:
@@ -205,7 +197,6 @@ jobs:
               raise RuntimeError(
                   f"Gemini failed after 3 attempts: {last_error}"
               )
-
 
           def pollinations_image(prompt, filename):
 
@@ -228,14 +219,9 @@ jobs:
               No watermark.
               """
 
-              encoded = quote(
-                  full_prompt,
-                  safe=""
-              )
-
               url = (
                   "https://gen.pollinations.ai/image/"
-                  + encoded
+                  + quote(full_prompt, safe="")
               )
 
               params = {
@@ -253,8 +239,7 @@ jobs:
                   try:
 
                       print(
-                          f"Pollinations image attempt "
-                          f"{attempt + 1}/3..."
+                          f"Generating image, attempt {attempt + 1}/3..."
                       )
 
                       response = requests.get(
@@ -284,21 +269,16 @@ jobs:
 
                       if filename.stat().st_size < 1000:
                           raise RuntimeError(
-                              "Generated image file is too small."
+                              "Generated image is too small."
                           )
-
-                      print(
-                          "Image created:",
-                          filename
-                      )
 
                       return
 
-                  except Exception as e:
+                  except Exception as error:
 
                       print(
                           "Image generation failed:",
-                          e
+                          error
                       )
 
                       if attempt < 2:
@@ -308,40 +288,7 @@ jobs:
                   f"Pollinations failed for {filename}"
               )
 
-
           async def make_voice(text, filename):
-
-              print(
-                  "Finding available Urdu/Hindi voices..."
-              )
-
-              try:
-
-                  voices = await edge_tts.list_voices()
-
-                  available = [
-                      v["ShortName"]
-                      for v in voices
-                      if v.get("Locale") in [
-                          "ur-PK",
-                          "hi-IN"
-                      ]
-                  ]
-
-                  print(
-                      "Available Urdu/Hindi voices:",
-                      available
-                  )
-
-              except Exception as e:
-
-                  print(
-                      "Could not list voices:",
-                      e
-                  )
-
-                  available = []
-
 
               preferred = [
                   "ur-PK-UzmaNeural",
@@ -350,40 +297,42 @@ jobs:
                   "hi-IN-SwaraNeural"
               ]
 
+              try:
 
-              voice_list = []
+                  voices = await edge_tts.list_voices()
 
+                  available = [
+                      voice["ShortName"]
+                      for voice in voices
+                      if voice.get("Locale")
+                      in ("ur-PK", "hi-IN")
+                  ]
 
-              for voice in preferred:
+              except Exception as error:
 
-                  if (
-                      voice in available
-                      and voice not in voice_list
-                  ):
-                      voice_list.append(voice)
-
-
-              for voice in available:
-
-                  if voice not in voice_list:
-                      voice_list.append(voice)
-
-
-              for voice in preferred:
-
-                  if voice not in voice_list:
-                      voice_list.append(voice)
-
-
-              if not voice_list:
-
-                  raise RuntimeError(
-                      "No Urdu/Hindi TTS voice available."
+                  print(
+                      "Voice list failed:",
+                      error
                   )
 
+                  available = []
+
+              voice_list = [
+                  voice
+                  for voice in preferred
+                  if voice in available
+              ]
+
+              voice_list += [
+                  voice
+                  for voice in available
+                  if voice not in voice_list
+              ]
+
+              if not voice_list:
+                  voice_list = preferred
 
               last_error = None
-
 
               for voice_name in voice_list:
 
@@ -392,22 +341,20 @@ jobs:
                       try:
 
                           print(
-                              f"Trying voice: {voice_name} "
-                              f"(attempt {attempt + 1}/3)"
+                              f"Trying voice {voice_name}, "
+                              f"attempt {attempt + 1}/3"
                           )
 
                           filename.unlink(
                               missing_ok=True
                           )
 
-                          communicate = edge_tts.Communicate(
+                          await edge_tts.Communicate(
                               text,
                               voice_name,
                               rate="+3%",
                               pitch="+0Hz"
-                          )
-
-                          await communicate.save(
+                          ).save(
                               str(filename)
                           )
 
@@ -417,34 +364,28 @@ jobs:
                           ):
 
                               print(
-                                  "Voice created successfully:",
+                                  "Voice created:",
                                   voice_name
                               )
 
                               return
 
-                          raise RuntimeError(
-                              "Audio file was not created properly."
-                          )
+                      except Exception as error:
 
-                      except Exception as e:
-
-                          last_error = e
+                          last_error = error
 
                           print(
-                              f"Voice failed: "
-                              f"{voice_name}: {e}"
+                              "Voice failed:",
+                              error
                           )
 
                           await asyncio.sleep(3)
-
 
               raise RuntimeError(
                   f"All Urdu/Hindi voices failed: {last_error}"
               )
 
-
-          def get_daily_topic():
+          def main():
 
               pakistan_now = datetime.now(
                   ZoneInfo("Asia/Karachi")
@@ -458,154 +399,194 @@ jobs:
                   day_number % len(TOPICS)
               ]
 
-              return topic, pakistan_now
-
-
-          def main():
-
-              topic, pakistan_now = get_daily_topic()
-
-
-              print("========================================")
               print(
                   "PAKISTAN DATE:",
                   pakistan_now.strftime("%Y-%m-%d")
               )
+
               print(
                   "TODAY'S TRADING TOPIC:",
                   topic
               )
-              print("========================================")
-
 
               story_prompt = f"""
+          Create ONE original funny wholesome YouTube Shorts story.
 
-              Create ONE original funny wholesome
-              YouTube Shorts story.
+          TODAY'S FIXED TRADING TOPIC:
+          {topic}
 
-              TODAY'S FIXED TRADING TOPIC:
-              {topic}
+          The video must teach this trading topic in a simple,
+          entertaining and memorable way.
 
-              The video must teach this trading topic
-              in a simple, entertaining and memorable way.
+          Main character:
+          The SAME young rhesus macaque monkey in every scene.
 
-              Main character:
+          Character:
+          brown-grey fur,
+          expressive dark eyes,
+          small rounded ears,
+          realistic proportions,
+          slightly mischievous face.
 
-              The SAME young rhesus macaque monkey
-              in every scene.
+          STORY STYLE:
+          Very funny.
+          Cute monkey comedy.
+          Strong hook at the beginning.
+          A funny mistake or misunderstanding.
+          Then a simple trading lesson.
+          End with a memorable lesson.
 
-              Character:
+          IMPORTANT:
+          This is educational content only.
 
-              brown-grey fur,
-              expressive dark eyes,
-              small rounded ears,
-              realistic proportions,
-              slightly mischievous face.
+          Do NOT give:
+          guaranteed profit,
+          guaranteed winning strategy,
+          100 percent accuracy claims,
+          direct buy or sell signals,
+          fake financial promises,
+          fake expert claims.
 
-              STORY STYLE:
+          Do not tell viewers to buy or sell any
+          specific coin, stock or financial product.
 
-              Very funny.
-              Cute monkey comedy.
-              Strong hook at the beginning.
-              A funny mistake or misunderstanding.
-              Then a simple trading lesson.
-              End with a memorable lesson.
+          LANGUAGE RULE:
 
-              IMPORTANT:
+          Narration MUST be written completely
+          in natural Urdu script.
 
-              This is educational content only.
+          Example:
+          "بندر نے آج ایک عجیب غلطی کر دی"
 
-              Do NOT give:
-              guaranteed profit,
-              guaranteed winning strategy,
-              100 percent accuracy claims,
-              direct buy or sell signals,
-              fake financial promises,
-              fake expert claims.
+          Do NOT write narration in Roman Urdu.
 
-              Do not tell viewers to buy or sell
-              any specific coin, stock or financial product.
+          Do NOT write narration in English.
 
-              LANGUAGE RULE:
+          The narration should sound natural when spoken
+          by a clear Hindi/Urdu voice.
 
-              Narration MUST be written completely
-              in natural Urdu script.
+          Title should be catchy and related to trading.
+          Title can contain simple English trading words if useful.
 
-              Example:
+          Description should be in Urdu
+          with simple trading terms.
 
-              "بندر نے آج ایک عجیب غلطی کر دی"
+          Create exactly 6 scenes.
 
-              Do NOT write narration in Roman Urdu.
+          Each scene should last exactly 5 seconds.
 
-              Do NOT write narration in English.
+          Total narration should be short enough
+          for about 25 to 30 seconds.
 
-              The narration should sound natural when spoken
-              by a clear Hindi/Urdu voice.
+          Narration should be around 65 to 80 Urdu words.
 
-              Title should be catchy and related to trading.
+          VISUAL PROMPTS:
 
-              Title can contain simple English trading words
-              if useful.
+          Visual prompts may be written in English.
 
-              Description should be in Urdu
-              with simple trading terms.
+          They must clearly describe the funny monkey action.
 
-              Create exactly 6 scenes.
+          Do not put text inside images.
 
-              Each scene should last exactly 5 seconds.
+          Return ONLY valid JSON.
 
-              Total narration should be short enough
-              for about 25 to 30 seconds.
+          Required JSON:
 
-              Narration should be around 65 to 80 Urdu words.
+          {{
+            "title": "...",
+            "description": "...",
+            "narration": "...",
+            "hashtags": [
+              "...",
+              "...",
+              "...",
+              "...",
+              "..."
+            ],
+            "tags": [
+              "...",
+              "...",
+              "...",
+              "..."
+            ],
+            "scenes": [
+              {{
+                "visual_prompt": "...",
+                "duration": 5
+              }},
+              {{
+                "visual_prompt": "...",
+                "duration": 5
+              }},
+              {{
+                "visual_prompt": "...",
+                "duration": 5
+              }},
+              {{
+                "visual_prompt": "...",
+                "duration": 5
+              }},
+              {{
+                "visual_prompt": "...",
+                "duration": 5
+              }},
+              {{
+                "visual_prompt": "...",
+                "duration": 5
+              }}
+            ]
+          }}
+          """
 
-VISUAL PROMPTS:
+              story = gemini_text(
+                  story_prompt
+              )
 
-Visual prompts may be written in English.
-They must clearly describe the funny monkey action.
-Do not put text inside images.
+              title = str(
+                  story.get("title", "")
+              ).strip()
 
-Return ONLY valid JSON.
+              description = str(
+                  story.get("description", "")
+              ).strip()
 
-Required JSON:
+              narration = str(
+                  story.get("narration", "")
+              ).strip()
 
-{
-  "title": "...",
-  "description": "...",
-  "narration": "...",
-  "hashtags": ["...", "...", "...", "...", "..."],
-  "tags": ["...", "...", "...", "..."],
-  "scenes": [
-    {"visual_prompt": "...", "duration": 5},
-    {"visual_prompt": "...", "duration": 5},
-    {"visual_prompt": "...", "duration": 5},
-    {"visual_prompt": "...", "duration": 5},
-    {"visual_prompt": "...", "duration": 5},
-    {"visual_prompt": "...", "duration": 5}
-  ]
-}
-"""
+              hashtags = story.get(
+                  "hashtags",
+                  []
+              )
 
-              story = gemini_text(story_prompt)
+              tags = story.get(
+                  "tags",
+                  []
+              )
 
-              title = str(story.get("title", "")).strip()
-              description = str(story.get("description", "")).strip()
-              narration = str(story.get("narration", "")).strip()
-              hashtags = story.get("hashtags", [])
-              tags = story.get("tags", [])
-              scenes = story.get("scenes", [])
+              scenes = story.get(
+                  "scenes",
+                  []
+              )
 
               if not title:
-                  raise RuntimeError("Gemini returned an empty title.")
+                  raise RuntimeError(
+                      "Gemini returned an empty title."
+                  )
 
               if not narration:
-                  raise RuntimeError("Gemini returned empty narration.")
+                  raise RuntimeError(
+                      "Gemini returned empty narration."
+                  )
 
               if len(scenes) != 6:
-                  raise RuntimeError("Gemini did not return exactly 6 scenes.")
+                  raise RuntimeError(
+                      "Gemini did not return exactly 6 scenes."
+                  )
 
               urdu_count = sum(
-                  1 for char in narration
+                  1
+                  for char in narration
                   if "\u0600" <= char <= "\u06ff"
               )
 
@@ -614,31 +595,49 @@ Required JSON:
                       "Narration is not sufficiently Urdu script."
                   )
 
-              print("TITLE:")
-              print(title)
+              print(
+                  "TITLE:",
+                  title
+              )
 
-              print("NARRATION:")
-              print(narration)
+              print(
+                  "NARRATION:",
+                  narration
+              )
 
               image_files = []
 
-              for index, scene in enumerate(scenes):
-                  filename = OUT / f"scene_{index + 1}.png"
+              for index, scene in enumerate(
+                  scenes,
+                  1
+              ):
+
+                  filename = (
+                      OUT / f"scene_{index}.png"
+                  )
 
                   print(
-                      f"Generating image {index + 1} of 6..."
+                      f"Generating image {index}/6..."
                   )
 
                   pollinations_image(
-                      str(scene["visual_prompt"]),
+                      str(
+                          scene["visual_prompt"]
+                      ),
                       filename
                   )
 
-                  image_files.append(filename)
+                  image_files.append(
+                      filename
+                  )
 
-              audio_file = OUT / "voice.mp3"
+              audio_file = (
+                  OUT / "voice.mp3"
+              )
 
-              print("Creating clear Hindi/Urdu voice...")
+              print(
+                  "Creating Urdu/Hindi voice..."
+              )
 
               asyncio.run(
                   make_voice(
@@ -649,11 +648,17 @@ Required JSON:
 
               clips = []
 
-              for index, image in enumerate(image_files):
-                  clip = OUT / f"clip_{index + 1}.mp4"
+              for index, image in enumerate(
+                  image_files,
+                  1
+              ):
+
+                  clip = (
+                      OUT / f"clip_{index}.mp4"
+                  )
 
                   print(
-                      f"Creating video clip {index + 1} of 6..."
+                      f"Creating clip {index}/6..."
                   )
 
                   run([
@@ -681,9 +686,13 @@ Required JSON:
                       str(clip)
                   ])
 
-                  clips.append(clip)
+                  clips.append(
+                      clip
+                  )
 
-              concat_file = OUT / "concat.txt"
+              concat_file = (
+                  OUT / "concat.txt"
+              )
 
               with open(
                   concat_file,
@@ -692,13 +701,18 @@ Required JSON:
               ) as file:
 
                   for clip in clips:
+
                       file.write(
                           f"file '{clip.resolve()}'\n"
                       )
 
-              video_file = OUT / "monkey_trading_short.mp4"
+              video_file = (
+                  OUT / "monkey_trading_short.mp4"
+              )
 
-              print("Combining video and Urdu voice...")
+              print(
+                  "Combining video and Urdu voice..."
+              )
 
               run([
                   "ffmpeg",
@@ -723,6 +737,24 @@ Required JSON:
                   str(video_file)
               ])
 
+              clean_hashtags = []
+
+              for hashtag in hashtags:
+
+                  hashtag = str(
+                      hashtag
+                  ).strip()
+
+                  if hashtag:
+
+                      if not hashtag.startswith("#"):
+                          hashtag = "#" + hashtag
+
+                      if hashtag not in clean_hashtags:
+                          clean_hashtags.append(
+                              hashtag
+                          )
+
               fixed_hashtags = (
                   "#Trading "
                   "#TradingUrdu "
@@ -732,24 +764,12 @@ Required JSON:
                   "#Shorts"
               )
 
-              clean_hashtags = []
-
-              for hashtag in hashtags:
-                  hashtag = str(hashtag).strip()
-
-                  if hashtag:
-                      if not hashtag.startswith("#"):
-                          hashtag = "#" + hashtag
-
-                      if hashtag not in clean_hashtags:
-                          clean_hashtags.append(hashtag)
-
-              hashtag_text = " ".join(clean_hashtags[:8])
-
               final_description = (
                   description
                   + "\n\n"
-                  + hashtag_text
+                  + " ".join(
+                      clean_hashtags[:8]
+                  )
                   + "\n"
                   + fixed_hashtags
               )
@@ -767,22 +787,36 @@ Required JSON:
               ]
 
               for tag in tags:
-                  tag = str(tag).strip()
 
-                  if tag and tag not in final_tags:
-                      final_tags.append(tag)
+                  tag = str(
+                      tag
+                  ).strip()
+
+                  if (
+                      tag
+                      and tag not in final_tags
+                  ):
+                      final_tags.append(
+                          tag
+                      )
 
               credentials = Credentials(
                   None,
                   refresh_token=REFRESH_TOKEN,
-                  token_uri="https://oauth2.googleapis.com/token",
+                  token_uri=(
+                      "https://oauth2.googleapis.com/token"
+                  ),
                   client_id=CLIENT_ID,
                   client_secret=CLIENT_SECRET
               )
 
-              print("Refreshing YouTube login...")
+              print(
+                  "Refreshing YouTube login..."
+              )
 
-              credentials.refresh(Request())
+              credentials.refresh(
+                  Request()
+              )
 
               youtube = build(
                   "youtube",
@@ -803,7 +837,9 @@ Required JSON:
                   }
               }
 
-              print("Uploading video to YouTube...")
+              print(
+                  "Uploading video to YouTube..."
+              )
 
               media = MediaFileUpload(
                   str(video_file),
@@ -811,25 +847,42 @@ Required JSON:
                   resumable=True
               )
 
-              upload_request = youtube.videos().insert(
-                  part="snippet,status",
-                  body=body,
-                  media_body=media
+              upload_request = (
+                  youtube.videos().insert(
+                      part="snippet,status",
+                      body=body,
+                      media_body=media
+                  )
               )
 
-              response = upload_request.execute()
+              response = (
+                  upload_request.execute()
+              )
 
               video_id = response["id"]
 
-              print("========================================")
-              print("SUCCESS!")
-              print("YouTube video ID:", video_id)
+              print(
+                  "========================================"
+              )
+
+              print(
+                  "SUCCESS!"
+              )
+
+              print(
+                  "YouTube video ID:",
+                  video_id
+              )
+
               print(
                   "YouTube URL:",
-                  "https://www.youtube.com/watch?v=" + video_id
+                  "https://www.youtube.com/watch?v="
+                  + video_id
               )
-              print("========================================")
 
+              print(
+                  "========================================"
+              )
 
           if __name__ == "__main__":
               main()
