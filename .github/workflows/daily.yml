@@ -8,7 +8,6 @@ on:
 jobs:
   daily:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -23,22 +22,25 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg espeak-ng
-          pip install requests pillow edge-tts google-api-python-client google-auth google-auth-httplib2
+          python -m pip install --upgrade pip
+          pip install requests pillow edge-tts google-api-python-client google-auth google-auth-oauthlib
 
       - name: Create and upload video
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
+          set -e
+
           cat > bot.py <<'PY'
           import os
           import json
           import re
-          import time
           import subprocess
           import asyncio
+          import textwrap
           import xml.etree.ElementTree as ET
           from pathlib import Path
 
@@ -46,76 +48,563 @@ jobs:
           from PIL import Image, ImageDraw, ImageFont
           import edge_tts
 
-          from google.oauth2.credentials import Credentials
           from google.auth.transport.requests import Request
+          from google.auth.exceptions import RefreshError
+          from google.oauth2.credentials import Credentials
           from googleapiclient.discovery import build
           from googleapiclient.http import MediaFileUpload
 
+
           GEMINI_KEY = os.environ["GEMINI_API_KEY"]
-          REFRESH_TOKEN = os.environ["YOUTUBE_REFRESH_TOKEN"]
           CLIENT_ID = os.environ["YOUTUBE_CLIENT_ID"]
           CLIENT_SECRET = os.environ["YOUTUBE_CLIENT_SECRET"]
+          REFRESH_TOKEN = os.environ["YOUTUBE_REFRESH_TOKEN"]
 
-          NICHE = "viral facts, psychology, money and technology"
-          MODEL = "gemini-3.5-flash"
-          WORK = Path("output")
+          WORK = Path("youtube_output")
           WORK.mkdir(exist_ok=True)
 
+          VIDEO_FILE = WORK / "video.mp4"
+          AUDIO_FILE = WORK / "voice.mp3"
+          THUMBNAIL_FILE = WORK / "thumbnail.jpg"
+
+
           def get_trends():
+              url = "https://trends.google.com/trending/rss?geo=US"
+
               try:
-                  r = requests.get(
-                      "https://trends.google.com/trending/rss?geo=US",
-                      timeout=20
-                  )
-                  r.raise_for_status()
-                  root = ET.fromstring(r.text)
+                  response = requests.get(url, timeout=20)
+                  response.raise_for_status()
+
+                  root = ET.fromstring(response.text)
+
                   topics = []
+
                   for item in root.findall(".//item"):
-                      title = item.find("title")
-                      if title is not None and title.text:
-                          topics.append(title.text.strip())
-                  return topics[:15]
+                      title = item.findtext("title")
+                      if title:
+                          title = title.strip()
+                          if title and title not in topics:
+                              topics.append(title)
+
+                  if topics:
+                      return topics[:10]
+
               except Exception as e:
-                  print("Trend fetch failed:", e)
-                  return []
+                  print("Trend fetch warning:", e)
+
+              return [
+                  "interesting psychology facts",
+                  "technology facts",
+                  "money facts",
+                  "human behavior facts",
+                  "AI facts"
+              ]
+
 
           def gemini(prompt):
               url = (
-                  "https://generativelanguage.googleapis.com/v1beta/models/"
-                  f"{MODEL}:generateContent?key={GEMINI_KEY}"
+                  "https://generativelanguage.googleapis.com/"
+                  "v1beta/models/gemini-3.5-flash:generateContent"
+                  f"?key={GEMINI_KEY}"
               )
+
               payload = {
-                  "contents": [{"parts": [{"text": prompt}]}]
+                  "contents": [
+                      {
+                          "parts": [
+                              {
+                                  "text": prompt
+                              }
+                          ]
+                      }
+                  ],
+                  "generationConfig": {
+                      "temperature": 0.8,
+                      "responseMimeType": "application/json"
+                  }
               }
 
-              last_error = None
-              for attempt in range(4):
-                  try:
-                      r = requests.post(
-                          url,
-                          headers={"Content-Type": "application/json"},
-                          json=payload,
-                          timeout=60
+              response = requests.post(
+                  url,
+                  json=payload,
+                  timeout=120
+              )
+
+              response.raise_for_status()
+
+              data = response.json()
+
+              text = (
+                  data["candidates"][0]["content"]["parts"][0]["text"]
+                  .strip()
+              )
+
+              text = re.sub(
+                  r"^```(?:json)?\s*|\s*```$",
+                  "",
+                  text,
+                  flags=re.IGNORECASE
+              ).strip()
+
+              return json.loads(text)
+
+
+          def make_content():
+              trends = get_trends()
+
+              trend_text = "\n".join(
+                  f"- {item}" for item in trends
+              )
+
+              prompt = f"""
+          You are creating one original YouTube video for a faceless channel.
+
+          Channel niche:
+          viral facts, psychology, money and technology
+
+          Current Google Trends topics:
+          {trend_text}
+
+          Select ONE topic that can make an interesting evergreen/viral-style
+          YouTube video.
+
+          Create an original 60-90 second video.
+
+          Return ONLY valid JSON with exactly these keys:
+
+          {{
+            "topic": "short topic",
+            "title": "YouTube title",
+            "description": "YouTube description",
+            "hashtags": ["#hashtag1", "#hashtag2", "#hashtag3"],
+            "tags": ["tag1", "tag2", "tag3", "tag4", "tag5"],
+            "script": "complete narration script",
+            "slides": [
+              "short slide text 1",
+              "short slide text 2",
+              "short slide text 3",
+              "short slide text 4",
+              "short slide text 5",
+              "short slide text 6"
+            ]
+          }}
+
+          Rules:
+          - Be factual and avoid fabricated statistics.
+          - Do not mention that AI created the video.
+          - No copyrighted text.
+          - Make the narration engaging.
+          - The title must be under 100 characters.
+          - Each slide should be short enough to display clearly.
+          """
+
+              result = gemini(prompt)
+
+              required = [
+                  "topic",
+                  "title",
+                  "description",
+                  "hashtags",
+                  "tags",
+                  "script",
+                  "slides"
+              ]
+
+              for key in required:
+                  if key not in result:
+                      raise RuntimeError(
+                          f"Gemini response missing key: {key}"
                       )
-                      if r.status_code in (429, 500, 502, 503):
-                          print("Gemini busy:", r.status_code)
-                          time.sleep(8 * (attempt + 1))
-                          continue
-                      r.raise_for_status()
-                      return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-                  except Exception as e:
-                      last_error = e
-                      print("Gemini attempt failed:", e)
-                      time.sleep(5)
 
-              raise RuntimeError(f"Gemini failed after retries: {last_error}")
+              if not result["slides"]:
+                  raise RuntimeError("Gemini returned no slides.")
 
-          def clean_json(text):
-              text = text.strip()
-              text = re.sub(r"^```json\s*", "", text)
-              text = re.sub(r"^```\s*", "", text)
-              text = re.sub(r"\s*```$", "", text)
-              start = text.find("{")
-              end = text.rfind("}")
-              if start < 0 or end < 0:
-                  raise ValueError("
+              return result
+
+
+          async def make_voice(text):
+              communicate = edge_tts.Communicate(
+                  text,
+                  "en-US-AriaNeural"
+              )
+
+              await communicate.save(str(AUDIO_FILE))
+
+
+          def make_voice_fallback(text):
+              subprocess.run(
+                  [
+                      "espeak-ng",
+                      "-w",
+                      str(AUDIO_FILE),
+                      text
+                  ],
+                  check=True
+              )
+
+
+          def make_slides(slides):
+              font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+              font_big = ImageFont.truetype(font_path, 58)
+              font_small = ImageFont.truetype(font_path, 42)
+
+              slide_files = []
+
+              for index, slide_text in enumerate(slides, start=1):
+                  image = Image.new(
+                      "RGB",
+                      (1280, 720),
+                      "black"
+                  )
+
+                  draw = ImageDraw.Draw(image)
+
+                  wrapped = textwrap.fill(
+                      str(slide_text),
+                      width=30
+                  )
+
+                  bbox = draw.multiline_textbbox(
+                      (0, 0),
+                      wrapped,
+                      font=font_big,
+                      spacing=15
+                  )
+
+                  width = bbox[2] - bbox[0]
+                  height = bbox[3] - bbox[1]
+
+                  x = (1280 - width) // 2
+                  y = (720 - height) // 2
+
+                  draw.multiline_text(
+                      (x, y),
+                      wrapped,
+                      font=font_big,
+                      fill="white",
+                      spacing=15,
+                      align="center"
+                  )
+
+                  number = str(index)
+
+                  draw.text(
+                      (40, 40),
+                      number,
+                      font=font_small,
+                      fill="white"
+                  )
+
+                  filename = WORK / f"slide_{index}.png"
+                  image.save(filename)
+
+                  slide_files.append(filename)
+
+              return slide_files
+
+
+          def make_video(slides):
+              duration = 0
+
+              probe = subprocess.run(
+                  [
+                      "ffprobe",
+                      "-v",
+                      "error",
+                      "-show_entries",
+                      "format=duration",
+                      "-of",
+                      "default=noprint_wrappers=1:nokey=1",
+                      str(AUDIO_FILE)
+                  ],
+                  capture_output=True,
+                  text=True,
+                  check=True
+              )
+
+              duration = float(probe.stdout.strip())
+
+              per_slide = max(duration / len(slides), 2.0)
+
+              concat_file = WORK / "slides.txt"
+
+              with open(concat_file, "w", encoding="utf-8") as f:
+                  for slide in slides:
+                      f.write(
+                          f"file '{slide.resolve()}'\n"
+                      )
+                      f.write(
+                          f"duration {per_slide}\n"
+                      )
+
+                  f.write(
+                      f"file '{slides[-1].resolve()}'\n"
+                  )
+
+              silent_video = WORK / "silent.mp4"
+
+              subprocess.run(
+                  [
+                      "ffmpeg",
+                      "-y",
+                      "-f",
+                      "concat",
+                      "-safe",
+                      "0",
+                      "-i",
+                      str(concat_file),
+                      "-vf",
+                      "format=yuv420p",
+                      "-r",
+                      "30",
+                      "-c:v",
+                      "libx264",
+                      "-pix_fmt",
+                      "yuv420p",
+                      str(silent_video)
+                  ],
+                  check=True
+              )
+
+              subprocess.run(
+                  [
+                      "ffmpeg",
+                      "-y",
+                      "-i",
+                      str(silent_video),
+                      "-i",
+                      str(AUDIO_FILE),
+                      "-map",
+                      "0:v:0",
+                      "-map",
+                      "1:a:0",
+                      "-c:v",
+                      "copy",
+                      "-c:a",
+                      "aac",
+                      "-shortest",
+                      str(VIDEO_FILE)
+                  ],
+                  check=True
+              )
+
+
+          def make_thumbnail(title):
+              font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+              font = ImageFont.truetype(font_path, 70)
+
+              image = Image.new(
+                  "RGB",
+                  (1280, 720),
+                  "black"
+              )
+
+              draw = ImageDraw.Draw(image)
+
+              wrapped = textwrap.fill(
+                  title,
+                  width=24
+              )
+
+              bbox = draw.multiline_textbbox(
+                  (0, 0),
+                  wrapped,
+                  font=font,
+                  spacing=15
+              )
+
+              width = bbox[2] - bbox[0]
+              height = bbox[3] - bbox[1]
+
+              x = (1280 - width) // 2
+              y = (720 - height) // 2
+
+              draw.multiline_text(
+                  (x, y),
+                  wrapped,
+                  font=font,
+                  fill="white",
+                  spacing=15,
+                  align="center"
+              )
+
+              image.save(
+                  THUMBNAIL_FILE,
+                  quality=92
+              )
+
+
+          def youtube_service():
+              scopes = [
+                  "https://www.googleapis.com/auth/youtube.upload"
+              ]
+
+              credentials = Credentials(
+                  token=None,
+                  refresh_token=REFRESH_TOKEN,
+                  token_uri="https://oauth2.googleapis.com/token",
+                  client_id=CLIENT_ID,
+                  client_secret=CLIENT_SECRET,
+                  scopes=scopes
+              )
+
+              try:
+                  credentials.refresh(Request())
+              except RefreshError as first_error:
+                  print(
+                      "YouTube OAuth refresh failed with client secret:"
+                  )
+                  print(first_error)
+
+                  print(
+                      "Trying refresh without client secret..."
+                  )
+
+                  credentials = Credentials(
+                      token=None,
+                      refresh_token=REFRESH_TOKEN,
+                      token_uri="https://oauth2.googleapis.com/token",
+                      client_id=CLIENT_ID,
+                      client_secret=None,
+                      scopes=scopes
+                  )
+
+                  try:
+                      credentials.refresh(Request())
+                  except Exception as second_error:
+                      raise RuntimeError(
+                          "YouTube OAuth refresh failed. "
+                          "The refresh token may be invalid, expired, "
+                          "revoked, or paired with a different OAuth client."
+                      ) from second_error
+
+              return build(
+                  "youtube",
+                  "v3",
+                  credentials=credentials
+              )
+
+
+          def upload_video(content):
+              youtube = youtube_service()
+
+              hashtags = " ".join(
+                  content.get("hashtags", [])
+              )
+
+              description = (
+                  content["description"]
+                  + "\n\n"
+                  + hashtags
+              )
+
+              body = {
+                  "snippet": {
+                      "title": content["title"][:100],
+                      "description": description,
+                      "tags": content.get("tags", []),
+                      "categoryId": "27"
+                  },
+                  "status": {
+                      "privacyStatus": "public",
+                      "selfDeclaredMadeForKids": False
+                  }
+              }
+
+              media = MediaFileUpload(
+                  str(VIDEO_FILE),
+                  mimetype="video/mp4",
+                  resumable=True
+              )
+
+              print("Uploading video to YouTube...")
+
+              request = youtube.videos().insert(
+                  part="snippet,status",
+                  body=body,
+                  media_body=media
+              )
+
+              response = request.execute()
+
+              video_id = response["id"]
+
+              print(
+                  "VIDEO UPLOADED:"
+                  f" https://www.youtube.com/watch?v={video_id}"
+              )
+
+              try:
+                  youtube.thumbnails().set(
+                      videoId=video_id,
+                      media_body=MediaFileUpload(
+                          str(THUMBNAIL_FILE),
+                          mimetype="image/jpeg"
+                      )
+                  ).execute()
+
+                  print("Thumbnail uploaded successfully.")
+
+              except Exception as thumbnail_error:
+                  print(
+                      "Thumbnail upload warning:",
+                      thumbnail_error
+                  )
+
+              return video_id
+
+
+          def main():
+              print("AI YouTube Bot started.")
+
+              print("Finding trending topics...")
+              content = make_content()
+
+              print("Selected topic:")
+              print(content["topic"])
+
+              print("Title:")
+              print(content["title"])
+
+              print("Generating voice...")
+
+              try:
+                  asyncio.run(
+                      make_voice(content["script"])
+                  )
+              except Exception as voice_error:
+                  print(
+                      "Edge TTS failed, using espeak-ng:",
+                      voice_error
+                  )
+                  make_voice_fallback(content["script"])
+
+              print("Creating slides...")
+              slides = make_slides(content["slides"])
+
+              print("Creating video...")
+              make_video(slides)
+
+              print("Creating thumbnail...")
+              make_thumbnail(content["title"])
+
+              print("Uploading...")
+              video_id = upload_video(content)
+
+              print(
+                  "DONE:"
+                  f" https://www.youtube.com/watch?v={video_id}"
+              )
+
+
+          if __name__ == "__main__":
+              main()
+          PY
+
+          python bot.py
+
+      - name: Post Setup Python
+        if: always()
+        run: |
+          echo "AI YouTube Bot workflow finished."
