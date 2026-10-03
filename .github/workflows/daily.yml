@@ -222,3 +222,149 @@ jobs:
                 "hashtags": ["..."],
                 "tags": ["..."],
                 "scenes": [
+                  {
+                    "visual_prompt": "...",
+                    "duration": 5
+                  }
+                ]
+              }
+              """
+
+              story = gemini_text(story_prompt)
+
+              title = story["title"]
+              narration = story["narration"]
+              scenes = story["scenes"]
+
+              image_files = []
+
+              for i, scene in enumerate(scenes):
+                  filename = OUT / f"scene_{i+1}.png"
+                  print(f"Generating image {i+1} of {len(scenes)}...")
+                  pollinations_image(
+                      scene["visual_prompt"],
+                      filename
+                  )
+                  image_files.append(filename)
+
+              audio_file = OUT / "voice.mp3"
+
+              print("Creating voice...")
+              asyncio.run(
+                  make_voice(narration, audio_file)
+              )
+
+              clips = []
+
+              for i, image in enumerate(image_files):
+                  clip = OUT / f"clip_{i+1}.mp4"
+
+                  run([
+                      "ffmpeg",
+                      "-y",
+                      "-loop", "1",
+                      "-i", str(image),
+                      "-t", "5",
+                      "-vf",
+                      "scale=720:1280,"
+                      "zoompan="
+                      "z='min(zoom+0.0015,1.08)':"
+                      "x='iw/2-(iw/zoom/2)':"
+                      "y='ih/2-(ih/zoom/2)':"
+                      "d=150:"
+                      "s=720x1280",
+                      "-r", "30",
+                      "-pix_fmt", "yuv420p",
+                      str(clip)
+                  ])
+
+                  clips.append(clip)
+
+              concat_file = OUT / "concat.txt"
+
+              with open(concat_file, "w") as f:
+                  for clip in clips:
+                      f.write(
+                          f"file '{clip.resolve()}'\n"
+                      )
+
+              video_file = OUT / "monkey_short.mp4"
+
+              run([
+                  "ffmpeg",
+                  "-y",
+                  "-f", "concat",
+                  "-safe", "0",
+                  "-i", str(concat_file),
+                  "-i", str(audio_file),
+                  "-c:v", "libx264",
+                  "-c:a", "aac",
+                  "-shortest",
+                  "-pix_fmt", "yuv420p",
+                  str(video_file)
+              ])
+
+              print("Uploading to YouTube...")
+
+              credentials = Credentials(
+                  None,
+                  refresh_token=REFRESH_TOKEN,
+                  token_uri="https://oauth2.googleapis.com/token",
+                  client_id=CLIENT_ID,
+                  client_secret=CLIENT_SECRET
+              )
+
+              credentials.refresh(Request())
+
+              youtube = build(
+                  "youtube",
+                  "v3",
+                  credentials=credentials
+              )
+
+              body = {
+                  "snippet": {
+                      "title": title,
+                      "description": story["description"],
+                      "tags": story["tags"],
+                      "categoryId": "24"
+                  },
+                  "status": {
+                      "privacyStatus": "public",
+                      "selfDeclaredMadeForKids": False
+                  }
+              }
+
+              media = MediaFileUpload(
+                  str(video_file),
+                  mimetype="video/mp4",
+                  resumable=True
+              )
+
+              request = youtube.videos().insert(
+                  part="snippet,status",
+                  body=body,
+                  media_body=media
+              )
+
+              response = request.execute()
+
+              print(
+                  "YouTube upload successful:",
+                  response["id"]
+              )
+
+
+          if __name__ == "__main__":
+              main()
+          PY
+
+          python bot.py
+
+      - name: Save generated files
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: monkey-youtube-output
+          path: output/
+          if-no-files-found: warn
