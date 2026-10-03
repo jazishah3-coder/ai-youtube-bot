@@ -1,4 +1,4 @@
-name: AI YouTube Monkey Shorts
+name: AI YouTube Monkey Trading Shorts
 
 on:
   workflow_dispatch:
@@ -39,8 +39,11 @@ jobs:
           import json
           import asyncio
           import subprocess
+          import time
           from pathlib import Path
           from urllib.parse import quote
+          from datetime import datetime
+          from zoneinfo import ZoneInfo
 
           import requests
           import edge_tts
@@ -51,6 +54,10 @@ jobs:
           from googleapiclient.http import MediaFileUpload
 
 
+          # ============================================================
+          # KEYS
+          # ============================================================
+
           GEMINI_KEY = os.environ["GEMINI_API_KEY"]
           POLLINATIONS_KEY = os.environ["POLLINATIONS_API_KEY"]
 
@@ -58,15 +65,117 @@ jobs:
           CLIENT_SECRET = os.environ["YOUTUBE_CLIENT_SECRET"]
           REFRESH_TOKEN = os.environ["YOUTUBE_REFRESH_TOKEN"]
 
+
+          # ============================================================
+          # SETTINGS
+          # ============================================================
+
           TEXT_MODEL = "gemini-3.5-flash-lite"
+
+          # Clear Urdu/Hindi-style Urdu voice
+          VOICE = "ur-PK-AsadNeural"
 
           OUT = Path("output")
           OUT.mkdir(exist_ok=True)
 
 
+          # ============================================================
+          # DAILY TRADING TOPICS
+          # ============================================================
+
+          TRADING_TOPICS = [
+              "FOMO اور جلد بازی میں ٹریڈ کرنا",
+              "Stop Loss کی اہمیت",
+              "Take Profit کیا ہوتا ہے",
+              "Support اور Resistance",
+              "Trend کو پہچاننا",
+              "Breakout اور Fake Breakout",
+              "Pullback کیا ہوتا ہے",
+              "Risk Management",
+              "Risk Reward Ratio",
+              "Position Size",
+              "Overtrading کا نقصان",
+              "Revenge Trading",
+              "Trading Psychology",
+              "Fear اور Greed",
+              "Patience in Trading",
+              "Trading Plan",
+              "Trading Journal",
+              "Candlestick Patterns",
+              "Market Structure",
+              "Higher High اور Higher Low",
+              "Lower High اور Lower Low",
+              "Resistance کا Support بننا",
+              "Support کا Resistance بننا",
+              "Entry Confirmation",
+              "Multiple Timeframes",
+              "Leverage کا خطرہ",
+              "Liquidation کیا ہوتی ہے",
+              "Margin کیا ہوتا ہے",
+              "Spot اور Futures کا فرق",
+              "Risk Per Trade",
+              "Win Rate اور Risk Reward",
+              "Spread کیا ہوتا ہے",
+              "Slippage کیا ہوتا ہے",
+              "News کے وقت Trading",
+              "Consolidation Market",
+              "Range Market",
+              "Trendline",
+              "Volume",
+              "Volume Breakout",
+              "RSI کا بنیادی استعمال",
+              "Moving Average",
+              "MACD کا بنیادی تصور",
+              "Divergence",
+              "Retest",
+              "Scalping اور Swing Trading",
+              "Backtesting",
+              "Paper Trading",
+              "Capital Protection",
+              "Trading Checklist",
+              "Liquidity",
+              "Liquidity Sweep",
+              "Order Block کا بنیادی تصور",
+              "Fair Value Gap کا بنیادی تصور",
+              "False Signal سے بچنا",
+              "Confirmation کا انتظار",
+              "Small Loss قبول کرنا",
+              "Discipline",
+              "Trading میں صبر",
+              "ایک وقت میں ایک اچھی Setup",
+              "Guaranteed Profit کے جھوٹ سے بچنا"
+          ]
+
+
+          # Pakistan date کے حساب سے topic rotate ہوگا۔
+          pakistan_now = datetime.now(
+              ZoneInfo("Asia/Karachi")
+          )
+
+          day_number = pakistan_now.date().toordinal()
+
+          selected_topic = TRADING_TOPICS[
+              day_number % len(TRADING_TOPICS)
+          ]
+
+          print("========================================")
+          print("Pakistan Date:", pakistan_now.date())
+          print("Today's Trading Topic:", selected_topic)
+          print("========================================")
+
+
+          # ============================================================
+          # COMMAND RUNNER
+          # ============================================================
+
           def run(cmd):
+              print("Running:", " ".join(map(str, cmd)))
               subprocess.run(cmd, check=True)
 
+
+          # ============================================================
+          # GEMINI TEXT
+          # ============================================================
 
           def gemini_text(prompt):
 
@@ -93,40 +202,52 @@ jobs:
                   }
               }
 
-              r = requests.post(
+              response = requests.post(
                   url,
                   json=payload,
                   timeout=180
               )
 
-              r.raise_for_status()
+              response.raise_for_status()
 
-              data = r.json()
+              data = response.json()
 
               text = (
                   data["candidates"][0]
                   ["content"]["parts"][0]["text"]
               )
 
-              return json.loads(
+              text = (
                   text.replace("```json", "")
-                      .replace("```", "")
-                      .strip()
+                  .replace("```", "")
+                  .strip()
               )
 
+              return json.loads(text)
+
+
+          # ============================================================
+          # POLLINATIONS IMAGE
+          # ============================================================
 
           def pollinations_image(prompt, filename):
 
               full_prompt = prompt + """
-              Photorealistic cinematic image.
+              Photorealistic cinematic scene.
               Vertical 9:16 composition.
-              Realistic monkey fur.
-              Natural human-like emotions.
-              Detailed environment.
+              Same young rhesus macaque monkey character.
+              Brown-grey realistic fur.
+              Expressive dark eyes.
+              Small rounded ears.
+              Realistic body proportions.
+              Funny facial expression.
               Natural cinematic lighting.
-              No text.
+              Detailed realistic environment.
+              Family friendly.
+              No readable text.
               No logo.
               No watermark.
+              No real person.
               """
 
               encoded = quote(full_prompt, safe="")
@@ -151,17 +272,17 @@ jobs:
 
                   try:
 
-                      r = requests.get(
+                      response = requests.get(
                           url,
                           params=params,
                           headers=headers,
                           timeout=240
                       )
 
-                      r.raise_for_status()
+                      response.raise_for_status()
 
                       content_type = (
-                          r.headers.get(
+                          response.headers.get(
                               "content-type",
                               ""
                           ).lower()
@@ -172,99 +293,375 @@ jobs:
                               "Pollinations did not return an image."
                           )
 
-                      filename.write_bytes(r.content)
+                      filename.write_bytes(
+                          response.content
+                      )
+
+                      print(
+                          "Image saved:",
+                          filename
+                      )
 
                       return
 
-                  except Exception:
+                  except Exception as error:
+
+                      print(
+                          "Image attempt failed:",
+                          attempt + 1,
+                          error
+                      )
 
                       if attempt == 2:
                           raise
 
-                      import time
                       time.sleep(5)
 
 
+          # ============================================================
+          # URDU VOICE
+          # ============================================================
+
           async def make_voice(text, filename):
 
-              voice = edge_tts.Communicate(
-                  text,
-                  "ur-PK-AsadNeural",
-                  rate="+5%"
+              communicate = edge_tts.Communicate(
+                  text=text,
+                  voice=VOICE,
+                  rate="+0%",
+                  volume="+0%",
+                  pitch="+0Hz"
               )
 
-              await voice.save(str(filename))
+              await communicate.save(
+                  str(filename)
+              )
 
+
+          # ============================================================
+          # MAIN
+          # ============================================================
 
           def main():
 
-              story_prompt = """
-              Create ONE original funny wholesome YouTube Shorts story.
+              story_prompt = f"""
+              آج کی تاریخ پاکستان کے مطابق:
+              {pakistan_now.strftime("%Y-%m-%d")}
+
+              آج کا لازمی Trading Topic:
+              {selected_topic}
+
+              ایک بہت مزاحیہ، دلچسپ اور family-friendly
+              YouTube Shorts story بناؤ۔
 
               Main character:
-              the SAME young rhesus macaque monkey in every scene.
+              SAME young rhesus macaque monkey in all 6 scenes.
 
-              Character appearance:
-              brown-grey fur, expressive dark eyes,
-              small rounded ears, realistic proportions,
-              slightly mischievous face.
+              Monkey appearance:
+              brown-grey fur,
+              expressive dark eyes,
+              small rounded ears,
+              realistic proportions,
+              mischievous funny face.
 
-              The story must be funny, emotional and family friendly.
+              STORY STYLE:
 
-              Create exactly 6 scenes.
+              Story بہت funny ہو۔
 
-              Return ONLY valid JSON with these fields:
+              پہلے 2 سے 3 سیکنڈ میں strong funny hook ہو۔
 
-              {
+              بندر trading کے دوران کوئی مزاحیہ غلطی کرے۔
+
+              پھر اس غلطی سے ایک دلچسپ situation پیدا ہو۔
+
+              آخر میں اسی Trading Topic کا آسان سا
+              educational lesson دیا جائے۔
+
+              Story boring lecture نہیں ہونی چاہیے۔
+
+              Comedy + story + trading lesson لازمی ہو۔
+
+              مثال کے طور پر:
+              بندر FOMO میں جلدی entry لے لیتا ہے،
+              پھر market الٹی طرف چلی جاتی ہے،
+              بندر کا funny reaction آتا ہے،
+              آخر میں اسے سمجھ آتی ہے کہ confirmation
+              اور risk management ضروری ہیں۔
+
+              لیکن ہر دن نئی story اور نیا scenario بناؤ۔
+
+              FINANCIAL SAFETY:
+
+              کوئی guaranteed profit نہ کہنا۔
+
+              "100% profit" نہ کہنا۔
+
+              "100% win" نہ کہنا۔
+
+              کسی کو specific buy/sell signal نہ دینا۔
+
+              کسی coin یا stock کو guaranteed winner نہ کہنا۔
+
+              صرف educational trading lesson دینا۔
+
+              LANGUAGE:
+
+              narration مکمل قدرتی اردو رسم الخط میں ہو۔
+
+              Roman Urdu استعمال نہ کرو۔
+
+              Narration میں غیر ضروری English جملے نہ ہوں۔
+
+              Trading کے عام terms جیسے FOMO,
+              Stop Loss, Support, Resistance وغیرہ
+              ضرورت کے مطابق English میں رہ سکتے ہیں۔
+
+              Voice ایسی لگنی چاہیے جیسے صاف اور قدرتی
+              Hindi/Urdu storytelling ہو۔
+
+              Narration تقریباً 65 سے 80 الفاظ کی ہو
+              تاکہ تقریباً 30 second Short میں fit ہو۔
+
+              TITLE:
+
+              Title funny اور curiosity والا ہو۔
+
+              Trading topic واضح ہو۔
+
+              Title زیادہ سے زیادہ تقریباً 80 characters کا ہو۔
+
+              DESCRIPTION:
+
+              مختصر Urdu description بناؤ۔
+
+              HASHTAGS:
+
+              6 سے 10 relevant trading hashtags دو۔
+
+              مثال:
+              #Trading
+              #TradingUrdu
+              #TradingPsychology
+              #RiskManagement
+              #TradingEducation
+              #Shorts
+
+              TAGS:
+
+              YouTube کے لیے relevant trading tags دو۔
+
+              SCENES:
+
+              Exactly 6 scenes بناؤ۔
+
+              ہر scene تقریباً 5 seconds کا ہو۔
+
+              Scene structure:
+
+              Scene 1:
+              Funny hook.
+
+              Scene 2:
+              Trading problem شروع۔
+
+              Scene 3:
+              Funny mistake یا unexpected situation۔
+
+              Scene 4:
+              Problem کا result۔
+
+              Scene 5:
+              Monkey صحیح trading concept سمجھتا ہے۔
+
+              Scene 6:
+              Funny ending + simple lesson۔
+
+              IMPORTANT:
+
+              visual_prompt English میں لکھو تاکہ image generation بہتر ہو۔
+
+              visual_prompt میں scene کا action,
+              monkey expression,
+              environment اور cinematic details واضح ہوں۔
+
+              Return ONLY valid JSON.
+
+              JSON format:
+
+              {{
                 "title": "...",
                 "description": "...",
                 "narration": "...",
-                "hashtags": ["..."],
-                "tags": ["..."],
+                "hashtags": [
+                  "#Trading",
+                  "#TradingUrdu"
+                ],
+                "tags": [
+                  "trading",
+                  "trading education"
+                ],
                 "scenes": [
-                  {
+                  {{
                     "visual_prompt": "...",
                     "duration": 5
-                  }
+                  }},
+                  {{
+                    "visual_prompt": "...",
+                    "duration": 5
+                  }},
+                  {{
+                    "visual_prompt": "...",
+                    "duration": 5
+                  }},
+                  {{
+                    "visual_prompt": "...",
+                    "duration": 5
+                  }},
+                  {{
+                    "visual_prompt": "...",
+                    "duration": 5
+                  }},
+                  {{
+                    "visual_prompt": "...",
+                    "duration": 5
+                  }}
                 ]
-              }
+              }}
               """
 
-              story = gemini_text(story_prompt)
+              print("Creating today's funny trading story...")
 
-              title = story["title"]
-              narration = story["narration"]
+              story = gemini_text(
+                  story_prompt
+              )
+
+              title = str(
+                  story["title"]
+              ).strip()
+
+              description = str(
+                  story["description"]
+              ).strip()
+
+              narration = str(
+                  story["narration"]
+              ).strip()
+
+              hashtags = story.get(
+                  "hashtags",
+                  []
+              )
+
+              tags = story.get(
+                  "tags",
+                  []
+              )
+
               scenes = story["scenes"]
+
+              if len(scenes) != 6:
+                  raise RuntimeError(
+                      "Gemini did not create exactly 6 scenes."
+                  )
+
+              if len(narration) < 80:
+                  raise RuntimeError(
+                      "Narration is too short."
+                  )
+
+              # Ensure Urdu script exists.
+              urdu_chars = sum(
+                  1
+                  for char in narration
+                  if "\u0600" <= char <= "\u06FF"
+              )
+
+              if urdu_chars < 20:
+                  raise RuntimeError(
+                      "Narration was not generated in Urdu script."
+                  )
+
+              print("========================================")
+              print("TITLE:")
+              print(title)
+              print("----------------------------------------")
+              print("NARRATION:")
+              print(narration)
+              print("========================================")
+
+
+              # ========================================================
+              # GENERATE 6 IMAGES
+              # ========================================================
 
               image_files = []
 
               for i, scene in enumerate(scenes):
-                  filename = OUT / f"scene_{i+1}.png"
-                  print(f"Generating image {i+1} of {len(scenes)}...")
+
+                  filename = (
+                      OUT / f"scene_{i + 1}.png"
+                  )
+
+                  print(
+                      f"Generating image {i + 1} of 6..."
+                  )
+
                   pollinations_image(
                       scene["visual_prompt"],
                       filename
                   )
-                  image_files.append(filename)
 
-              audio_file = OUT / "voice.mp3"
+                  image_files.append(
+                      filename
+                  )
 
-              print("Creating voice...")
-              asyncio.run(
-                  make_voice(narration, audio_file)
+
+              # ========================================================
+              # CREATE URDU VOICE
+              # ========================================================
+
+              audio_file = (
+                  OUT / "voice.mp3"
               )
+
+              print(
+                  "Creating clear Urdu/Hindi-style voice..."
+              )
+
+              asyncio.run(
+                  make_voice(
+                      narration,
+                      audio_file
+                  )
+              )
+
+
+              # ========================================================
+              # CREATE VIDEO CLIPS
+              # ========================================================
 
               clips = []
 
-              for i, image in enumerate(image_files):
-                  clip = OUT / f"clip_{i+1}.mp4"
+              for i, image in enumerate(
+                  image_files
+              ):
+
+                  clip = (
+                      OUT / f"clip_{i + 1}.mp4"
+                  )
+
+                  print(
+                      f"Creating video clip {i + 1}..."
+                  )
 
                   run([
                       "ffmpeg",
                       "-y",
-                      "-loop", "1",
-                      "-i", str(image),
-                      "-t", "5",
+                      "-loop",
+                      "1",
+                      "-i",
+                      str(image),
+                      "-t",
+                      "5",
                       "-vf",
                       "scale=720:1280,"
                       "zoompan="
@@ -273,98 +670,31 @@ jobs:
                       "y='ih/2-(ih/zoom/2)':"
                       "d=150:"
                       "s=720x1280",
-                      "-r", "30",
-                      "-pix_fmt", "yuv420p",
+                      "-r",
+                      "30",
+                      "-pix_fmt",
+                      "yuv420p",
+                      "-an",
                       str(clip)
                   ])
 
-                  clips.append(clip)
+                  clips.append(
+                      clip
+                  )
 
-              concat_file = OUT / "concat.txt"
 
-              with open(concat_file, "w") as f:
-                  for clip in clips:
-                      f.write(
-                          f"file '{clip.resolve()}'\n"
-                      )
+              # ========================================================
+              # CONCATENATE VIDEO
+              # ========================================================
 
-              video_file = OUT / "monkey_short.mp4"
-
-              run([
-                  "ffmpeg",
-                  "-y",
-                  "-f", "concat",
-                  "-safe", "0",
-                  "-i", str(concat_file),
-                  "-i", str(audio_file),
-                  "-c:v", "libx264",
-                  "-c:a", "aac",
-                  "-shortest",
-                  "-pix_fmt", "yuv420p",
-                  str(video_file)
-              ])
-
-              print("Uploading to YouTube...")
-
-              credentials = Credentials(
-                  None,
-                  refresh_token=REFRESH_TOKEN,
-                  token_uri="https://oauth2.googleapis.com/token",
-                  client_id=CLIENT_ID,
-                  client_secret=CLIENT_SECRET
+              concat_file = (
+                  OUT / "concat.txt"
               )
 
-              credentials.refresh(Request())
+              with open(
+                  concat_file,
+                  "w",
+                  encoding="utf-8"
+              ) as file:
 
-              youtube = build(
-                  "youtube",
-                  "v3",
-                  credentials=credentials
-              )
-
-              body = {
-                  "snippet": {
-                      "title": title,
-                      "description": story["description"],
-                      "tags": story["tags"],
-                      "categoryId": "24"
-                  },
-                  "status": {
-                      "privacyStatus": "public",
-                      "selfDeclaredMadeForKids": False
-                  }
-              }
-
-              media = MediaFileUpload(
-                  str(video_file),
-                  mimetype="video/mp4",
-                  resumable=True
-              )
-
-              request = youtube.videos().insert(
-                  part="snippet,status",
-                  body=body,
-                  media_body=media
-              )
-
-              response = request.execute()
-
-              print(
-                  "YouTube upload successful:",
-                  response["id"]
-              )
-
-
-          if __name__ == "__main__":
-              main()
-          PY
-
-          python bot.py
-
-      - name: Save generated files
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: monkey-youtube-output
-          path: output/
-          if-no-files-found: warn
+                  for
