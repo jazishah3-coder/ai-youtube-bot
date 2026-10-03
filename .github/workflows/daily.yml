@@ -47,6 +47,7 @@ jobs:
           import edge_tts
 
           from google.oauth2.credentials import Credentials
+          from google.auth.transport.requests import Request
           from googleapiclient.discovery import build
           from googleapiclient.http import MediaFileUpload
 
@@ -257,7 +258,6 @@ jobs:
               img = Image.new("RGB", (1920, 1080), (18, 18, 28))
               draw = ImageDraw.Draw(img)
 
-              # simple background design
               for y in range(1080):
                   shade = int(18 + (y / 1080) * 25)
                   draw.line((0, y, 1920, y), fill=(shade, shade, shade + 8))
@@ -266,7 +266,6 @@ jobs:
               body_font = ImageFont.truetype(font_regular, 48)
               small_font = ImageFont.truetype(font_bold, 32)
 
-              # Main title
               title_lines = wrap_text(
                   draw,
                   title,
@@ -289,7 +288,6 @@ jobs:
 
                   y += 90
 
-              # Slide text
               body_lines = wrap_text(
                   draw,
                   text,
@@ -331,7 +329,6 @@ jobs:
                   make_slide(str(slide_text), i)
               )
 
-          # Get audio duration
           result = subprocess.run(
               [
                   "ffprobe",
@@ -355,7 +352,6 @@ jobs:
                   f.write(f"file '{path.resolve()}'\n")
                   f.write(f"duration {slide_duration}\n")
 
-              # concat demuxer needs the final image repeated
               f.write(f"file '{slide_paths[-1].resolve()}'\n")
 
           video_path = WORK / "video.mp4"
@@ -378,7 +374,6 @@ jobs:
               check=True
           )
 
-          # Thumbnail
           thumb = Image.new("RGB", (1280, 720), (15, 15, 20))
           draw = ImageDraw.Draw(thumb)
 
@@ -429,6 +424,22 @@ jobs:
               scopes=scopes
           )
 
+          try:
+              credentials.refresh(Request())
+          except Exception as first_error:
+              print("YouTube token refresh failed:", first_error)
+              print("Retrying without client secret...")
+
+              credentials = Credentials(
+                  token=None,
+                  refresh_token=REFRESH_TOKEN,
+                  token_uri="https://oauth2.googleapis.com/token",
+                  client_id=CLIENT_ID,
+                  client_secret=None,
+                  scopes=scopes
+              )
+              credentials.refresh(Request())
+
           youtube = build(
               "youtube",
               "v3",
@@ -477,7 +488,6 @@ jobs:
           print("VIDEO UPLOADED:", video_id)
           print("https://www.youtube.com/watch?v=" + video_id)
 
-          # Try custom thumbnail
           try:
               youtube.thumbnails().set(
                   videoId=video_id,
